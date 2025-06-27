@@ -1,5 +1,3 @@
-# main_window.py
-
 from typing import List, Optional
 
 from utils.qt_imports import *
@@ -8,10 +6,17 @@ from core.recording_timer import RecordingTimer
 from widgets.preview_widget import PreviewWidget
 from utils.gif_saver import save_gif_from_frames
 
+from pynput import keyboard
+
 class GifRecorderMainWindow(QMainWindow):
     """
     The main application window, managing recording state, UI modes, and user interactions.
     """
+    # Define signals for hotkey actions to ensure thread-safe GUI updates
+    record_signal = pyqtSignal()
+    pause_signal = pyqtSignal()
+    stop_signal = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.frames: List[QImage] = []
@@ -20,9 +25,12 @@ class GifRecorderMainWindow(QMainWindow):
         self.record_timer: Optional[RecordingTimer] = None
         self.drag_pos = QPoint()
         self._last_mode_was_edit = True  # Start in "ready" mode, which behaves like edit mode off
+        self.hotkey_listener = None  # Initialize as None
+        self._is_closing = False  # Flag to prevent hotkey actions during shutdown
 
         self._init_ui()
         self._update_ui_for_mode()
+        self._setup_global_hotkeys()
 
         QApplication.instance().aboutToQuit.connect(self.on_application_quit)
         self.show()
@@ -92,6 +100,11 @@ class GifRecorderMainWindow(QMainWindow):
         # Status Label
         self.status_label = QLabel("Ready.")
         controls_layout.addWidget(self.status_label)
+
+        # Hotkey Info Label
+        self.hotkey_info_label = QLabel("")
+        self.hotkey_info_label.setStyleSheet("font-size: 10px; color: gray;")
+        controls_layout.addWidget(self.hotkey_info_label)
         
         # Preview Widget
         self.preview_widget = PreviewWidget()
@@ -208,13 +221,20 @@ class GifRecorderMainWindow(QMainWindow):
              painter.fillRect(self.rect(), CONTROLS_BACKGROUND_COLOR)
         else:
             # Draw the red recording frame
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            # Draw the red recording frame using filled rectangles to ensure no overlap with transparent area
             painter.fillRect(self.controls_frame.geometry(), CONTROLS_BACKGROUND_COLOR.lighter(120))
-            pen = QPen(FRAME_COLOR, float(FRAME_THICKNESS))
-            painter.setPen(pen)
-            frame_rect = QRect(0, 0, self.width(), self.height() - self.controls_frame.height())
-            half_pen = FRAME_THICKNESS // 2
-            painter.drawRect(frame_rect.adjusted(half_pen, half_pen, -half_pen, -half_pen))
+            
+            # Calculate the height of the recording area
+            recording_area_height = self.height() - self.controls_frame.height()
+
+            # Draw top bar
+            painter.fillRect(0, 0, self.width(), FRAME_THICKNESS, FRAME_COLOR)
+            # Draw bottom bar
+            painter.fillRect(0, recording_area_height - FRAME_THICKNESS, self.width(), FRAME_THICKNESS, FRAME_COLOR)
+            # Draw left bar
+            painter.fillRect(0, FRAME_THICKNESS, FRAME_THICKNESS, recording_area_height - (2 * FRAME_THICKNESS), FRAME_COLOR)
+            # Draw right bar
+            painter.fillRect(self.width() - FRAME_THICKNESS, FRAME_THICKNESS, FRAME_THICKNESS, recording_area_height - (2 * FRAME_THICKNESS), FRAME_COLOR)
 
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
@@ -245,9 +265,11 @@ class GifRecorderMainWindow(QMainWindow):
         event.accept()
         
     def closeEvent(self, event: QCloseEvent):
-        self.on_application_quit()
+        """Handle window close event with proper cleanup."""
+        self._is_closing = True
+        self._cleanup_resources()
+        event.accept()
         QApplication.instance().quit()
-        super().closeEvent(event)
 
     def confirm_quit(self):
         """Asks the user for confirmation before quitting the application."""
@@ -259,15 +281,39 @@ class GifRecorderMainWindow(QMainWindow):
             self.close()
 
     def on_application_quit(self):
-        """Ensures the recording thread is stopped cleanly when the app closes."""
+        """Ensures all resources are cleaned up when the app closes."""
+        self._is_closing = True
+        self._cleanup_resources()
+
+    def _cleanup_resources(self):
+        """Centralized cleanup method for all resources."""
+        # Stop recording timer first
         if self.record_timer and self.record_timer.isRunning():
-            self.record_timer.stop()
-            self.record_timer.wait()
-            self.record_timer = None
+            try:
+                self.record_timer.stop()
+                self.record_timer.wait(3000)  # Wait max 3 seconds
+                self.record_timer = None
+            except Exception as e:
+                print(f"Error stopping recording timer: {e}")
+
+        # Stop hotkey listener
+        if hasattr(self, 'hotkey_listener') and self.hotkey_listener is not None:
+            try:
+                if hasattr(self.hotkey_listener, 'running') and self.hotkey_listener.running:
+                    self.hotkey_listener.stop()
+                    # Don't use join() as it can cause deadlocks
+                    # The listener thread will terminate gracefully
+                self.hotkey_listener = None
+            except Exception as e:
+                print(f"Error stopping hotkey listener: {e}")
 
     # --- Button Handlers ---
     
     def handle_record_button(self):
+        """Handle record button with safety check for shutdown."""
+        if self._is_closing:
+            return
+            
         if self._is_edit_mode():
             self.clear_frames(confirm=True)
         elif not self.is_recording:
@@ -275,8 +321,20 @@ class GifRecorderMainWindow(QMainWindow):
         else:
             self.stop_recording()
 
+    def handle_stop_button(self):
+        """Handles the stop action, regardless of current mode."""
+        if self._is_closing:
+            return
+            
+        if self.is_recording:
+            self.stop_recording()
+        elif self.frames:
+            # If in edit mode with frames, "stop" means clear frames
+            self.clear_frames(confirm=True)
+
     def handle_pause_button(self):
-        if not self.is_recording or not self.record_timer:
+        """Handle pause button with safety check for shutdown."""
+        if self._is_closing or not self.is_recording or not self.record_timer:
             return
 
         self.is_paused = not self.is_paused
@@ -389,13 +447,14 @@ class GifRecorderMainWindow(QMainWindow):
     def update_mask(self):
         """Creates the transparent 'hole' for the recording area."""
         full_window_rgn = QRegion(self.rect())
-        hole_width = self.width() - (2 * FRAME_THICKNESS)
-        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS)
+        # Shrink the hole by 1 pixel on each side to ensure the frame is never recorded
+        hole_width = self.width() - (2 * FRAME_THICKNESS) - 2
+        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS) - 2
         hole_width = max(0, hole_width)
         hole_height = max(0, hole_height)
 
         transparent_hole_rgn = QRegion(
-            FRAME_THICKNESS, FRAME_THICKNESS, hole_width, hole_height
+            FRAME_THICKNESS + 1, FRAME_THICKNESS + 1, hole_width, hole_height
         )
         final_mask_rgn = full_window_rgn.subtracted(transparent_hole_rgn)
         self.setMask(final_mask_rgn)
@@ -416,11 +475,59 @@ class GifRecorderMainWindow(QMainWindow):
     def get_recording_rect(self) -> QRect:
         """Calculates the screen coordinates of the transparent recording area."""
         global_pos = self.mapToGlobal(QPoint(0, 0))
-        hole_width = self.width() - (2 * FRAME_THICKNESS)
-        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS)
+        # Shrink the recording rectangle by 1 pixel on each side to ensure the frame is never recorded
+        hole_width = self.width() - (2 * FRAME_THICKNESS) - 2
+        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS) - 2
         return QRect(
-            global_pos.x() + FRAME_THICKNESS,
-            global_pos.y() + FRAME_THICKNESS,
+            global_pos.x() + FRAME_THICKNESS + 1,
+            global_pos.y() + FRAME_THICKNESS + 1,
             hole_width,
             hole_height
         )
+
+    # --- Global Hotkey Management ---
+
+    def _setup_global_hotkeys(self):
+        """Sets up global hotkeys for record, pause, and stop with error handling."""
+        try:
+            # Define hotkeys. Using a combination to avoid common single key conflicts.
+            record_hotkey = '<ctrl>+<alt>+r'
+            pause_hotkey = '<ctrl>+<alt>+p'
+            stop_hotkey = '<ctrl>+<alt>+s'
+
+            # Connect signals to the actual handler methods
+            self.record_signal.connect(self.handle_record_button)
+            self.pause_signal.connect(self.handle_pause_button)
+            self.stop_signal.connect(self.handle_stop_button)
+
+            # Create wrapper functions that emit the signals
+            def on_record_hotkey():
+                if not self._is_closing:
+                    self.record_signal.emit()
+
+            def on_pause_hotkey():
+                if not self._is_closing:
+                    self.pause_signal.emit()
+
+            def on_stop_hotkey():
+                if not self._is_closing:
+                    self.stop_signal.emit()
+
+            # Create a mapping of hotkeys to their respective wrapper methods
+            hotkey_map = {
+                record_hotkey: on_record_hotkey,
+                pause_hotkey: on_pause_hotkey,
+                stop_hotkey: on_stop_hotkey
+            }
+
+            # Create a global listener with error handling
+            self.hotkey_listener = keyboard.GlobalHotKeys(hotkey_map)
+            self.hotkey_listener.start()
+            self.hotkey_info_label.setText("Hotkeys: Ctrl+Alt+R (Record), Ctrl+Alt+P (Pause), Ctrl+Alt+S (Stop)")
+            
+        except Exception as e:
+            print(f"Failed to setup global hotkeys: {e}")
+            self.hotkey_info_label.setText("Hotkeys disabled (setup failed)")
+            self.hotkey_listener = None
+        
+        self.update_status_label() # Update status label to reflect initial state
