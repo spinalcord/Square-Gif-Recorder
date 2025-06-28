@@ -1,533 +1,760 @@
 from typing import List, Optional
+from dataclasses import dataclass
+from enum import Enum
 
 from utils.qt_imports import *
 from utils.constants import *
 from core.recording_timer import RecordingTimer
 from widgets.preview_widget import PreviewWidget
 from utils.gif_saver import save_gif_from_frames
-
 from pynput import keyboard
+
+
+class AppMode(Enum):
+    """Application states for better state management."""
+    READY = "ready"
+    RECORDING = "recording"
+    PAUSED = "paused"
+    EDITING = "editing"
+
+
+@dataclass
+class QualitySettings:
+    """Container for GIF quality settings."""
+    scale_factor: float = 1.0
+    num_colors: int = 256
+    use_dithering: bool = True
+    skip_frame: int = 1
+    lossy_level: int = 0
+    disposal_method: int = 0
+    similarity_threshold: float = 0.95
+    enable_similarity_skip: bool = True
+
+
+@dataclass
+class HotkeyConfig:
+    """Configuration for global hotkeys."""
+    record: str = '<ctrl>+<alt>+r'
+    pause: str = '<ctrl>+<alt>+p'
+    stop: str = '<ctrl>+<alt>+s'
+
+
+class UIManager:
+    """Manages UI state transitions and updates."""
+    
+    def __init__(self, main_window):
+        self.main_window = main_window
+        
+    def update_for_mode(self, mode: AppMode) -> None:
+        """Update UI elements based on current application mode."""
+        is_edit = mode == AppMode.EDITING
+        is_recording = mode in [AppMode.RECORDING, AppMode.PAUSED]
+        
+        self._update_button_states(mode)
+        self._update_visibility(is_edit, is_recording)
+        self._update_window_properties(is_edit)
+        self._update_layout(is_edit)
+        
+        self.main_window.update_status_label()
+        self.main_window.update()
+        
+        # Adjust window size if mode changed significantly
+        if is_edit != self.main_window._last_mode_was_edit:
+            self.main_window.adjustSize()
+        
+        self.main_window._last_mode_was_edit = is_edit
+    
+    def _update_button_states(self, mode: AppMode) -> None:
+        """Update button text and states based on mode."""
+        mw = self.main_window
+        
+        if mode == AppMode.EDITING:
+            mw.record_btn.setText("New")
+            mw.record_btn.setToolTip("Discard current frames and start a new recording.")
+        elif mode == AppMode.RECORDING:
+            mw.record_btn.setText("Stop")
+            mw.record_btn.setToolTip("")
+            mw.pause_btn.setText("Pause")
+        elif mode == AppMode.PAUSED:
+            mw.pause_btn.setText("Resume")
+        else:  # READY
+            mw.record_btn.setText("Record")
+            mw.record_btn.setToolTip("")
+    
+    def _update_visibility(self, is_edit: bool, is_recording: bool) -> None:
+        """Update widget visibility based on mode."""
+        mw = self.main_window
+        
+        mw.pause_btn.setVisible(is_recording)
+        mw.preview_widget.setVisible(is_edit)
+        mw.quality_groupbox.setVisible(is_edit)
+        mw.save_btn.setVisible(is_edit)
+        
+        mw.fps_spin.setEnabled(not is_recording)
+        mw.save_btn.setEnabled(is_edit)
+    
+    def _update_window_properties(self, is_edit: bool) -> None:
+        """Update window transparency and mask."""
+        mw = self.main_window
+        
+        if is_edit:
+            mw.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+            mw.clearMask()
+        else:
+            mw.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            mw.update_mask()
+    
+    def _update_layout(self, is_edit: bool) -> None:
+        """Update layout spacer for recording area."""
+        mw = self.main_window
+        
+        if is_edit:
+            if mw.main_layout.indexOf(mw.recording_area_spacer) != -1:
+                mw.main_layout.removeItem(mw.recording_area_spacer)
+        else:
+            if mw.main_layout.indexOf(mw.recording_area_spacer) == -1:
+                mw.main_layout.insertSpacerItem(0, mw.recording_area_spacer)
+
+
+class HotkeyManager:
+    """Manages global hotkeys with proper error handling."""
+    
+    def __init__(self, main_window, config: HotkeyConfig):
+        self.main_window = main_window
+        self.config = config
+        self.listener: Optional[keyboard.GlobalHotKeys] = None
+        self._is_active = False
+    
+    def setup(self) -> bool:
+        """Setup global hotkeys. Returns True if successful."""
+        try:
+            hotkey_map = {
+                self.config.record: self._safe_emit_record,
+                self.config.pause: self._safe_emit_pause,
+                self.config.stop: self._safe_emit_stop
+            }
+            
+            self.listener = keyboard.GlobalHotKeys(hotkey_map)
+            self.listener.start()
+            self._is_active = True
+            return True
+            
+        except Exception as e:
+            print(f"Failed to setup global hotkeys: {e}")
+            self.listener = None
+            self._is_active = False
+            return False
+    
+    def cleanup(self) -> None:
+        """Clean up hotkey listener."""
+        if self.listener and self._is_active:
+            try:
+                self.listener.stop()
+                self.listener = None
+                self._is_active = False
+            except Exception as e:
+                print(f"Error stopping hotkey listener: {e}")
+    
+    def _safe_emit_record(self) -> None:
+        if not self.main_window._is_closing:
+            self.main_window.record_signal.emit()
+    
+    def _safe_emit_pause(self) -> None:
+        if not self.main_window._is_closing:
+            self.main_window.pause_signal.emit()
+    
+    def _safe_emit_stop(self) -> None:
+        if not self.main_window._is_closing:
+            self.main_window.stop_signal.emit()
+    
+    @property
+    def status_text(self) -> str:
+        """Get status text for hotkeys."""
+        if self._is_active:
+            return f"Hotkeys: {self.config.record} (Record), {self.config.pause} (Pause), {self.config.stop} (Stop)"
+        return "Hotkeys disabled (setup failed)"
+
+
+class RecordingManager:
+    """Manages recording state and operations."""
+    
+    def __init__(self, main_window):
+        self.main_window = main_window
+        self.timer: Optional[RecordingTimer] = None
+        self._mode = AppMode.READY
+    
+    @property
+    def mode(self) -> AppMode:
+        return self._mode
+    
+    def start(self, record_rect: QRect, fps: int) -> bool:
+        """Start recording. Returns True if successful."""
+        if record_rect.width() <= 0 or record_rect.height() <= 0:
+            QMessageBox.warning(self.main_window, "Error", "The recording area is too small.")
+            return False
+        
+        self.main_window.clear_frames(confirm=False)
+        self._mode = AppMode.RECORDING
+        
+        self.timer = RecordingTimer(record_rect, fps)
+        self.timer.frame_captured.connect(self.main_window.add_frame)
+        self.timer.start()
+        return True
+    
+    def stop(self) -> None:
+        """Stop recording."""
+        if self.timer:
+            self.timer.stop()
+            self.timer.wait()
+            self.timer = None
+        
+        self._mode = AppMode.EDITING if self.main_window.frames else AppMode.READY
+    
+    def pause(self) -> None:
+        """Pause recording."""
+        if self._mode == AppMode.RECORDING and self.timer:
+            self.timer.pause()
+            self._mode = AppMode.PAUSED
+    
+    def resume(self) -> None:
+        """Resume recording."""
+        if self._mode == AppMode.PAUSED and self.timer:
+            self.timer.resume()
+            self._mode = AppMode.RECORDING
+    
+    def toggle_pause(self) -> None:
+        """Toggle between pause and resume."""
+        if self._mode == AppMode.RECORDING:
+            self.pause()
+        elif self._mode == AppMode.PAUSED:
+            self.resume()
+
 
 class GifRecorderMainWindow(QMainWindow):
     """
-    The main application window, managing recording state, UI modes, and user interactions.
+    Clean, well-structured main window for GIF recording application.
+    Responsibilities are properly separated into manager classes.
     """
-    # Define signals for hotkey actions to ensure thread-safe GUI updates
+    
+    # Qt signals for thread-safe hotkey handling
     record_signal = pyqtSignal()
     pause_signal = pyqtSignal()
     stop_signal = pyqtSignal()
 
     def __init__(self):
         super().__init__()
+        
+        # Core data
         self.frames: List[QImage] = []
-        self.is_recording = False
-        self.is_paused = False
-        self.record_timer: Optional[RecordingTimer] = None
         self.drag_pos = QPoint()
-        self._last_mode_was_edit = True  # Start in "ready" mode, which behaves like edit mode off
-        self.hotkey_listener = None  # Initialize as None
-        self._is_closing = False  # Flag to prevent hotkey actions during shutdown
-
+        self._last_mode_was_edit = True
+        self._is_closing = False
+        
+        # Initialize managers
+        self.ui_manager = UIManager(self)
+        self.recording_manager = RecordingManager(self)
+        self.hotkey_manager = HotkeyManager(self, HotkeyConfig())
+        
+        # Setup
         self._init_ui()
-        self._update_ui_for_mode()
-        self._setup_global_hotkeys()
+        self._connect_signals()
+        self._setup_window()
+        self._setup_hotkeys()
+        
+        # Initial state
+        self.ui_manager.update_for_mode(AppMode.READY)
+        QTimer.singleShot(0, self._initial_fix)
 
-        QApplication.instance().aboutToQuit.connect(self.on_application_quit)
-        self.show()
-        # A small fix to ensure the mask is drawn correctly on startup
-        QTimer.singleShot(0, self.initial_fix)
-
-    def initial_fix(self):
-        """Ensures the mask is correctly applied on first launch."""
-        if not self.frames:
-            self.update_mask()
-            self.update()
-
-    def _init_ui(self):
-        self.setWindowTitle("Python GIF Screen Recorder")
-        # Center the window on the screen
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        x = (screen_geometry.width() - 500) // 2
-        y = (screen_geometry.height() - 720) // 2
-        self.setGeometry(x, y, 500, 720)
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
-        )
-
+    def _init_ui(self) -> None:
+        """Initialize the user interface."""
+        self._create_central_widget()
+        self._create_controls()
+        self._create_preview_section()
+        self._create_quality_settings()
+        self._add_size_grip()
+    
+    def _create_central_widget(self) -> None:
+        """Create the main layout structure."""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         self.main_layout = QVBoxLayout(central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
-
-        # This spacer creates the transparent recording area
-        self.recording_area_spacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+        
+        # Transparent recording area spacer
+        self.recording_area_spacer = QSpacerItem(
+            20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
+        )
         self.main_layout.addSpacerItem(self.recording_area_spacer)
-
-        # --- Controls Area ---
+    
+    def _create_controls(self) -> None:
+        """Create the main control panel."""
         self.controls_frame = QWidget()
         controls_layout = QVBoxLayout(self.controls_frame)
         controls_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Toolbar
-        toolbar_layout = QHBoxLayout()
-        self.record_btn = QPushButton("Record")
-        self.record_btn.clicked.connect(self.handle_record_button)
-        toolbar_layout.addWidget(self.record_btn)
-
-        self.pause_btn = QPushButton("Pause")
-        self.pause_btn.clicked.connect(self.handle_pause_button)
-        toolbar_layout.addWidget(self.pause_btn)
-
-        toolbar_layout.addWidget(QLabel("Recording FPS:"))
-        self.fps_spin = QSpinBox()
-        self.fps_spin.setRange(1, 60)
-        self.fps_spin.setValue(15)
-        toolbar_layout.addWidget(self.fps_spin)
-
-        self.save_btn = QPushButton("Save")
-        self.save_btn.clicked.connect(self.handle_save_button)
-        toolbar_layout.addWidget(self.save_btn)
-
-        self.quit_btn = QPushButton("Quit")
-        self.quit_btn.clicked.connect(self.confirm_quit)
-        toolbar_layout.addWidget(self.quit_btn)
-        controls_layout.addLayout(toolbar_layout)
-
-        # Status Label
+        # Toolbar with main buttons
+        toolbar = self._create_toolbar()
+        controls_layout.addLayout(toolbar)
+        
+        # Status and info labels
         self.status_label = QLabel("Ready.")
         controls_layout.addWidget(self.status_label)
-
-        # Hotkey Info Label
+        
         self.hotkey_info_label = QLabel("")
         self.hotkey_info_label.setStyleSheet("font-size: 10px; color: gray;")
         controls_layout.addWidget(self.hotkey_info_label)
         
-        # Preview Widget
-        self.preview_widget = PreviewWidget()
-        controls_layout.addWidget(self.preview_widget)
+        self.main_layout.addWidget(self.controls_frame)
+    
+    def _create_toolbar(self) -> QHBoxLayout:
+        """Create the main toolbar with buttons and FPS control."""
+        toolbar_layout = QHBoxLayout()
         
-        # Quality Settings
+        # Action buttons
+        self.record_btn = QPushButton("Record")
+        self.pause_btn = QPushButton("Pause")
+        self.save_btn = QPushButton("Save")
+        self.quit_btn = QPushButton("Quit")
+        
+        # FPS control
+        self.fps_spin = QSpinBox()
+        self.fps_spin.setRange(1, 60)
+        self.fps_spin.setValue(15)
+        
+        # Add to layout
+        toolbar_layout.addWidget(self.record_btn)
+        toolbar_layout.addWidget(self.pause_btn)
+        toolbar_layout.addWidget(QLabel("Recording FPS:"))
+        toolbar_layout.addWidget(self.fps_spin)
+        toolbar_layout.addWidget(self.save_btn)
+        toolbar_layout.addWidget(self.quit_btn)
+        
+        return toolbar_layout
+    
+    def _create_preview_section(self) -> None:
+        """Create the preview widget section."""
+        self.preview_widget = PreviewWidget()
+        controls_layout = self.controls_frame.layout()
+        controls_layout.addWidget(self.preview_widget)
+
+    def _create_quality_settings(self) -> None:
+        """Create quality settings group."""
         self.quality_groupbox = QGroupBox("Quality Settings")
         quality_layout = QFormLayout()
+        
+        # Scale setting
         self.scale_combo = QComboBox()
         self.scale_combo.addItems(["100%", "75%", "50%", "25%"])
         quality_layout.addRow("Scale:", self.scale_combo)
         
+        # Colors setting
         self.colors_combo = QComboBox()
         self.colors_combo.addItems(["256 (Default)", "128", "64", "32"])
         quality_layout.addRow("Colors:", self.colors_combo)
-
+        
+        # Frame skipping
         self.skip_frame_spin = QSpinBox()
         self.skip_frame_spin.setRange(1, 20)
         self.skip_frame_spin.setValue(1)
-        self.skip_frame_spin.setToolTip("Reduces frame rate to decrease file size (1=all, 2=every second, etc.)")
+        self.skip_frame_spin.setToolTip("Reduces frame rate (1=all, 2=every second, etc.)")
         quality_layout.addRow("Use every n-th frame:", self.skip_frame_spin)
         
+        # NEU: Ähnlichkeits-Erkennung aktivieren/deaktivieren
+        self.similarity_check = QCheckBox("Skip similar frames")
+        self.similarity_check.setChecked(True)
+        self.similarity_check.setToolTip("Automatically skip frames that are very similar to the previous frame")
+        quality_layout.addRow(self.similarity_check)
+        
+        # NEU: Ähnlichkeits-Schwellenwert
+        similarity_layout = QHBoxLayout()
+        self.similarity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.similarity_slider.setRange(85, 99)  # 0.85 bis 0.99
+        self.similarity_slider.setValue(95)  # 0.95 default
+        self.similarity_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.similarity_slider.setTickInterval(5)
+        self.similarity_slider.setToolTip("Higher values = more frames skipped (more aggressive)")
+        
+        self.similarity_label = QLabel("95%")
+        self.similarity_slider.valueChanged.connect(
+            lambda v: self.similarity_label.setText(f"{v}%")
+        )
+        
+        # Ähnlichkeits-Einstellungen nur aktiv wenn Checkbox aktiviert
+        self.similarity_check.toggled.connect(self.similarity_slider.setEnabled)
+        self.similarity_check.toggled.connect(self.similarity_label.setEnabled)
+        
+        similarity_layout.addWidget(self.similarity_slider)
+        similarity_layout.addWidget(self.similarity_label)
+        quality_layout.addRow("Skip similarity of:", similarity_layout)
+        
+        # Dithering
         self.dithering_check = QCheckBox("Use Dithering")
         self.dithering_check.setChecked(True)
         quality_layout.addRow(self.dithering_check)
-
-        # New: Disposal Method ComboBox
+        
+        # Disposal method
         self.disposal_combo = QComboBox()
         self.disposal_combo.addItems([
-            "No Disposal (0)",
-            "Do Not Dispose (1)",
-            "Restore to Background (2)",
-            "Restore to Previous (3)"
+            "No Disposal (0)", "Do Not Dispose (1)",
+            "Restore to Background (2)", "Restore to Previous (3)"
         ])
-        self.disposal_combo.setCurrentIndex(0) # Default to 0
         quality_layout.addRow("Disposal Method:", self.disposal_combo)
-
-        # New: Lossy Compression Slider
+        
+        # Lossy compression
         lossy_layout = QHBoxLayout()
         self.lossy_level_slider = QSlider(Qt.Orientation.Horizontal)
         self.lossy_level_slider.setRange(0, 10)
-        self.lossy_level_slider.setValue(0) # Default to no lossy compression
-        self.lossy_level_slider.setSingleStep(1)
-        self.lossy_level_slider.setPageStep(1)
+        self.lossy_level_slider.setValue(0)
         self.lossy_level_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.lossy_level_slider.setTickInterval(1)
+        
         self.lossy_level_label = QLabel("0")
-        self.lossy_level_slider.valueChanged.connect(lambda value: self.lossy_level_label.setText(str(value)))
+        self.lossy_level_slider.valueChanged.connect(
+            lambda v: self.lossy_level_label.setText(str(v))
+        )
+        
         lossy_layout.addWidget(self.lossy_level_slider)
         lossy_layout.addWidget(self.lossy_level_label)
         quality_layout.addRow("Lossy Compression (0-10):", lossy_layout)
-
+        
         self.quality_groupbox.setLayout(quality_layout)
+        controls_layout = self.controls_frame.layout()
         controls_layout.addWidget(self.quality_groupbox)
 
-        # Size Grip for resizing
+    def _add_size_grip(self) -> None:
+        """Add size grip for window resizing."""
         sizegrip_layout = QHBoxLayout()
         sizegrip_layout.addStretch()
         self.sizegrip = QSizeGrip(self.controls_frame)
         sizegrip_layout.addWidget(self.sizegrip)
+        
+        controls_layout = self.controls_frame.layout()
         controls_layout.addLayout(sizegrip_layout)
+    
+    def _connect_signals(self) -> None:
+        """Connect all signals to their handlers."""
+        # Button connections
+        self.record_btn.clicked.connect(self._on_record_clicked)
+        self.pause_btn.clicked.connect(self._on_pause_clicked)
+        self.save_btn.clicked.connect(self._on_save_clicked)
+        self.quit_btn.clicked.connect(self.confirm_quit)
         
-        self.main_layout.addWidget(self.controls_frame)
-
-    # --- UI Mode and State Management ---
-
-    def _is_edit_mode(self) -> bool:
-        """Determines if the application is in 'edit mode' (post-recording)."""
-        return not self.is_recording and len(self.frames) > 0
-
-    def _update_ui_for_mode(self):
-        """Switches the UI visibility and properties based on the current mode."""
-        is_edit = self._is_edit_mode()
-        self.pause_btn.setVisible(self.is_recording)
-
-        if is_edit:
-            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-            self.clearMask()
-            self.record_btn.setText("New")
-            self.record_btn.setToolTip("Discard current frames and start a new recording.")
-            self.preview_widget.show()
-            self.quality_groupbox.show()
-            self.save_btn.show()
-            self.fps_spin.setEnabled(True)
-            self.save_btn.setEnabled(True)
-            if self.main_layout.indexOf(self.recording_area_spacer) != -1:
-                self.main_layout.removeItem(self.recording_area_spacer)
-        else: # Recording or Ready mode
-            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # Hotkey signal connections
+        self.record_signal.connect(self._on_record_clicked)
+        self.pause_signal.connect(self._on_pause_clicked)
+        self.stop_signal.connect(self._on_stop_clicked)
+        
+        # Application lifecycle
+        QApplication.instance().aboutToQuit.connect(self._cleanup_resources)
+    
+    def _setup_window(self) -> None:
+        """Setup window properties and positioning."""
+        self.setWindowTitle("Python GIF Screen Recorder")
+        
+        # Center on screen
+        screen = QApplication.primaryScreen()
+        screen_geometry = screen.availableGeometry()
+        x = (screen_geometry.width() - 500) // 2
+        y = (screen_geometry.height() - 720) // 2
+        self.setGeometry(x, y, 500, 720)
+        
+        # Window flags
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        
+        self.show()
+    
+    def _setup_hotkeys(self) -> None:
+        """Setup global hotkeys with error handling."""
+        success = self.hotkey_manager.setup()
+        self.hotkey_info_label.setText(self.hotkey_manager.status_text)
+    
+    def _initial_fix(self) -> None:
+        """Fix for proper mask application on startup."""
+        if not self.frames:
             self.update_mask()
-            self.record_btn.setText("Stop" if self.is_recording else "Record")
-            self.record_btn.setToolTip("")
-            self.preview_widget.hide()
-            self.quality_groupbox.hide()
-            self.save_btn.hide()
-            self.fps_spin.setEnabled(not self.is_recording)
-            if self.main_layout.indexOf(self.recording_area_spacer) == -1:
-                self.main_layout.insertSpacerItem(0, self.recording_area_spacer)
+            self.update()
+
+    # Event Handlers
+    def _on_record_clicked(self) -> None:
+        """Handle record button click."""
+        if self._is_closing:
+            return
         
+        mode = self.recording_manager.mode
+        
+        if mode == AppMode.EDITING:
+            self.clear_frames(confirm=True)
+        elif mode == AppMode.READY:
+            self._start_recording()
+        elif mode in [AppMode.RECORDING, AppMode.PAUSED]:
+            self._stop_recording()
+    
+    def _on_pause_clicked(self) -> None:
+        """Handle pause button click."""
+        if self._is_closing:
+            return
+        
+        self.recording_manager.toggle_pause()
+        self.ui_manager.update_for_mode(self.recording_manager.mode)
+    
+    def _on_stop_clicked(self) -> None:
+        """Handle stop action."""
+        if self._is_closing:
+            return
+        
+        if self.recording_manager.mode in [AppMode.RECORDING, AppMode.PAUSED]:
+            self._stop_recording()
+        elif self.frames:
+            self.clear_frames(confirm=True)
+    
+    def _on_save_clicked(self) -> None:
+        """Handle save button click."""
+        quality_settings = self._get_quality_settings()
+        frames_to_save = self._prepare_frames_for_save(quality_settings)
+        
+        if not frames_to_save:
+            QMessageBox.warning(self, "Error", "No frames to save.")
+            return
+        
+        self._save_gif(frames_to_save, quality_settings)
+    
+    # Core Recording Logic
+    def _start_recording(self) -> None:
+        """Start a new recording session."""
+        record_rect = self.get_recording_rect()
+        
+        if self.recording_manager.start(record_rect, self.fps_spin.value()):
+            self.ui_manager.update_for_mode(self.recording_manager.mode)
+    
+    def _stop_recording(self) -> None:
+        """Stop the current recording session."""
+        self.recording_manager.stop()
+        
+        if self.frames:
+            self.preview_widget.set_frames(self.frames, self.fps_spin.value())
+        
+        self.ui_manager.update_for_mode(self.recording_manager.mode)
+    
+    def add_frame(self, image: QImage) -> None:
+        """Add a new frame to the recording."""
+        self.frames.append(image)
         self.update_status_label()
-        self.update() # Force repaint
+    
+    def clear_frames(self, confirm: bool = True) -> None:
+        """Clear all recorded frames."""
+        if not self.frames and confirm:
+            self.ui_manager.update_for_mode(AppMode.READY)
+            return
         
-        # Adjust window size if the mode change affects vertical space
-        if is_edit != self._last_mode_was_edit:
-            self.adjustSize()
+        if confirm and self.frames:
+            reply = QMessageBox.question(
+                self, "New Recording",
+                "Discard current frames and start a new recording session?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         
-        self._last_mode_was_edit = is_edit
-
-    # --- Event Handling ---
-
-    def paintEvent(self, event: QPaintEvent):
-        painter = QPainter(self)
-        if self._is_edit_mode():
-             painter.fillRect(self.rect(), CONTROLS_BACKGROUND_COLOR)
-        else:
-            # Draw the red recording frame
-            # Draw the red recording frame using filled rectangles to ensure no overlap with transparent area
-            painter.fillRect(self.controls_frame.geometry(), CONTROLS_BACKGROUND_COLOR.lighter(120))
+        self.frames.clear()
+        self.preview_widget.set_frames([], self.fps_spin.value())
+        self.recording_manager._mode = AppMode.READY
+        self.ui_manager.update_for_mode(AppMode.READY)
+    
+    # Helper Methods
+    def _get_quality_settings(self) -> QualitySettings:
+            """Get current quality settings from UI."""
+            scale_factors = [1.0, 0.75, 0.5, 0.25]
+            color_counts = [256, 128, 64, 32]
             
-            # Calculate the height of the recording area
-            recording_area_height = self.height() - self.controls_frame.height()
-
-            # Draw top bar
-            painter.fillRect(0, 0, self.width(), FRAME_THICKNESS, FRAME_COLOR)
-            # Draw bottom bar
-            painter.fillRect(0, recording_area_height - FRAME_THICKNESS, self.width(), FRAME_THICKNESS, FRAME_COLOR)
-            # Draw left bar
-            painter.fillRect(0, FRAME_THICKNESS, FRAME_THICKNESS, recording_area_height - (2 * FRAME_THICKNESS), FRAME_COLOR)
-            # Draw right bar
-            painter.fillRect(self.width() - FRAME_THICKNESS, FRAME_THICKNESS, FRAME_THICKNESS, recording_area_height - (2 * FRAME_THICKNESS), FRAME_COLOR)
-
-    def resizeEvent(self, event: QResizeEvent):
+            return QualitySettings(
+                scale_factor=scale_factors[self.scale_combo.currentIndex()],
+                num_colors=color_counts[self.colors_combo.currentIndex()],
+                use_dithering=self.dithering_check.isChecked(),
+                skip_frame=self.skip_frame_spin.value(),
+                lossy_level=self.lossy_level_slider.value(),
+                disposal_method=self.disposal_combo.currentIndex(),
+                # NEU: Ähnlichkeits-Einstellungen
+                similarity_threshold=self.similarity_slider.value() / 100.0,  # Convert to 0-1 range
+                enable_similarity_skip=self.similarity_check.isChecked()
+            )
+    
+    def _prepare_frames_for_save(self, settings: QualitySettings) -> List[QImage]:
+        """Prepare frames for saving based on preview selection."""
+        start_index = self.preview_widget.start_slider.value()
+        end_index = self.preview_widget.end_slider.value()
+        frames = self.frames[start_index:end_index + 1]
+        
+        if settings.skip_frame > 1:
+            frames = frames[::settings.skip_frame]
+        
+        return frames
+    
+    def _save_gif(self, frames: List[QImage], settings: QualitySettings) -> None:
+            """Save frames as GIF with given settings."""
+            fps = self.preview_widget.preview_fps_spin.value()
+            
+            saved_filename = save_gif_from_frames(
+                parent_widget=self,
+                frames=frames,
+                fps=fps,
+                scale_factor=settings.scale_factor,
+                num_colors=settings.num_colors,
+                use_dithering=settings.use_dithering,
+                skip_value=settings.skip_frame,
+                lossy_level=settings.lossy_level,
+                disposal_method=settings.disposal_method,
+                # NEU: Ähnlichkeits-Parameter
+                similarity_threshold=settings.similarity_threshold,
+                enable_similarity_skip=settings.enable_similarity_skip,
+                progress_callback=self._update_save_progress
+            )
+            
+            if saved_filename:
+                self.status_label.setText(f"Saved: {saved_filename}")
+            else:
+                self.update_status_label()
+    
+    def _update_save_progress(self, value: int) -> None:
+        """Update status during GIF saving."""
+        self.status_label.setText(f"Saving GIF: Processing frame {value}...")
+    
+    def update_status_label(self) -> None:
+        """Update the status label based on current state."""
+        mode = self.recording_manager.mode
+        frame_count = len(self.frames)
+        
+        if mode == AppMode.RECORDING:
+            self.status_label.setText(f"Recording... ({frame_count} frames)")
+        elif mode == AppMode.PAUSED:
+            self.status_label.setText(f"Paused. ({frame_count} frames)")
+        elif mode == AppMode.EDITING:
+            self.status_label.setText(f"Done. {frame_count} frames. Ready to edit or save.")
+        else:  # READY
+            rect = self.get_recording_rect()
+            if rect.width() > 0 and rect.height() > 0:
+                self.status_label.setText(f"Ready. Area: {rect.width()} × {rect.height()}")
+            else:
+                self.status_label.setText("Please enlarge the window.")
+    
+    def get_recording_rect(self) -> QRect:
+        """Calculate screen coordinates of the recording area."""
+        global_pos = self.mapToGlobal(QPoint(0, 0))
+        hole_width = self.width() - (2 * FRAME_THICKNESS) - 2
+        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS) - 2
+        
+        return QRect(
+            global_pos.x() + FRAME_THICKNESS + 1,
+            global_pos.y() + FRAME_THICKNESS + 1,
+            max(0, hole_width),
+            max(0, hole_height)
+        )
+    
+    def update_mask(self) -> None:
+        """Create transparent recording area mask."""
+        full_window_rgn = QRegion(self.rect())
+        hole_width = self.width() - (2 * FRAME_THICKNESS) - 2
+        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS) - 2
+        
+        if hole_width > 0 and hole_height > 0:
+            transparent_hole_rgn = QRegion(
+                FRAME_THICKNESS + 1, FRAME_THICKNESS + 1, hole_width, hole_height
+            )
+            final_mask_rgn = full_window_rgn.subtracted(transparent_hole_rgn)
+            self.setMask(final_mask_rgn)
+    
+    # Qt Event Overrides
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """Handle window painting."""
+        painter = QPainter(self)
+        
+        if self.recording_manager.mode == AppMode.EDITING:
+            painter.fillRect(self.rect(), CONTROLS_BACKGROUND_COLOR)
+        else:
+            self._paint_recording_frame(painter)
+    
+    def _paint_recording_frame(self, painter: QPainter) -> None:
+        """Paint the red recording frame."""
+        painter.fillRect(self.controls_frame.geometry(), CONTROLS_BACKGROUND_COLOR.lighter(120))
+        
+        recording_area_height = self.height() - self.controls_frame.height()
+        
+        # Draw frame borders
+        painter.fillRect(0, 0, self.width(), FRAME_THICKNESS, FRAME_COLOR)
+        painter.fillRect(0, recording_area_height - FRAME_THICKNESS, 
+                        self.width(), FRAME_THICKNESS, FRAME_COLOR)
+        painter.fillRect(0, FRAME_THICKNESS, FRAME_THICKNESS, 
+                        recording_area_height - (2 * FRAME_THICKNESS), FRAME_COLOR)
+        painter.fillRect(self.width() - FRAME_THICKNESS, FRAME_THICKNESS, 
+                        FRAME_THICKNESS, recording_area_height - (2 * FRAME_THICKNESS), FRAME_COLOR)
+    
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Handle window resize."""
         super().resizeEvent(event)
         self.update_status_label()
-        if not self._is_edit_mode():
+        
+        if self.recording_manager.mode != AppMode.EDITING:
             self.update_mask()
+        
         self.update()
-
-    def mousePressEvent(self, event: QMouseEvent):
+    
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Handle mouse press for window dragging."""
         if event.button() == Qt.MouseButton.LeftButton:
-            # Handle API difference between PyQt5 and PyQt6 for global position
             if QT_VERSION == 6:
                 self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             else:
                 self.drag_pos = event.globalPos() - self.frameGeometry().topLeft()
             event.accept()
-
-    def mouseMoveEvent(self, event: QMouseEvent):
+    
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Handle mouse move for window dragging."""
         if event.buttons() == Qt.MouseButton.LeftButton and not self.drag_pos.isNull():
             if QT_VERSION == 6:
                 self.move(event.globalPosition().toPoint() - self.drag_pos)
             else:
                 self.move(event.globalPos() - self.drag_pos)
             event.accept()
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
+    
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Handle mouse release."""
         self.drag_pos = QPoint()
         event.accept()
-        
-    def closeEvent(self, event: QCloseEvent):
-        """Handle window close event with proper cleanup."""
+    
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Handle window close."""
         self._is_closing = True
         self._cleanup_resources()
         event.accept()
         QApplication.instance().quit()
-
-    def confirm_quit(self):
-        """Asks the user for confirmation before quitting the application."""
-        reply = QMessageBox.question(self, "Quit Application",
-                                     "Are you sure you want to quit?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                     QMessageBox.StandardButton.No)
+    
+    def confirm_quit(self) -> None:
+        """Show quit confirmation dialog."""
+        reply = QMessageBox.question(
+            self, "Quit Application",
+            "Are you sure you want to quit?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
         if reply == QMessageBox.StandardButton.Yes:
             self.close()
-
-    def on_application_quit(self):
-        """Ensures all resources are cleaned up when the app closes."""
+    
+    def _cleanup_resources(self) -> None:
+        """Clean up all resources."""
         self._is_closing = True
-        self._cleanup_resources()
-
-    def _cleanup_resources(self):
-        """Centralized cleanup method for all resources."""
-        # Stop recording timer first
-        if self.record_timer and self.record_timer.isRunning():
+        
+        # Stop recording
+        if self.recording_manager.timer:
             try:
-                self.record_timer.stop()
-                self.record_timer.wait(3000)  # Wait max 3 seconds
-                self.record_timer = None
+                self.recording_manager.timer.stop()
+                self.recording_manager.timer.wait(3000)
             except Exception as e:
                 print(f"Error stopping recording timer: {e}")
-
-        # Stop hotkey listener
-        if hasattr(self, 'hotkey_listener') and self.hotkey_listener is not None:
-            try:
-                if hasattr(self.hotkey_listener, 'running') and self.hotkey_listener.running:
-                    self.hotkey_listener.stop()
-                    # Don't use join() as it can cause deadlocks
-                    # The listener thread will terminate gracefully
-                self.hotkey_listener = None
-            except Exception as e:
-                print(f"Error stopping hotkey listener: {e}")
-
-    # --- Button Handlers ---
-    
-    def handle_record_button(self):
-        """Handle record button with safety check for shutdown."""
-        if self._is_closing:
-            return
-            
-        if self._is_edit_mode():
-            self.clear_frames(confirm=True)
-        elif not self.is_recording:
-            self.start_recording()
-        else:
-            self.stop_recording()
-
-    def handle_stop_button(self):
-        """Handles the stop action, regardless of current mode."""
-        if self._is_closing:
-            return
-            
-        if self.is_recording:
-            self.stop_recording()
-        elif self.frames:
-            # If in edit mode with frames, "stop" means clear frames
-            self.clear_frames(confirm=True)
-
-    def handle_pause_button(self):
-        """Handle pause button with safety check for shutdown."""
-        if self._is_closing or not self.is_recording or not self.record_timer:
-            return
-
-        self.is_paused = not self.is_paused
-        if self.is_paused:
-            self.record_timer.pause()
-            self.pause_btn.setText("Resume")
-        else:
-            self.record_timer.resume()
-            self.pause_btn.setText("Pause")
-        self.update_status_label()
-
-    def handle_save_button(self):
-        start_index = self.preview_widget.start_slider.value()
-        end_index = self.preview_widget.end_slider.value()
-        frames_to_save = self.frames[start_index : end_index + 1]
-
-        skip_value = self.skip_frame_spin.value()
-        if skip_value > 1:
-            frames_to_save = frames_to_save[::skip_value]
-
-        if not frames_to_save:
-            QMessageBox.warning(self, "Error", "The selected range (after skipping frames) is empty.")
-            return
-
-        scale_factor = [1.0, 0.75, 0.5, 0.25][self.scale_combo.currentIndex()]
-        num_colors = [256, 128, 64, 32][self.colors_combo.currentIndex()]
-        use_dithering = self.dithering_check.isChecked()
-        fps = self.preview_widget.preview_fps_spin.value()
         
-        saved_filename = save_gif_from_frames(
-            parent_widget=self,
-            frames=frames_to_save,
-            fps=fps,
-            scale_factor=scale_factor,
-            num_colors=num_colors,
-            use_dithering=use_dithering,
-            skip_value=skip_value,
-            lossy_level=self.lossy_level_slider.value(), # Pass the new lossy level
-            disposal_method=self.disposal_combo.currentIndex(), # Pass the selected disposal method
-            progress_callback=self._update_save_progress
-        )
-        if saved_filename:
-            self.status_label.setText(f"Saved: {saved_filename}")
-        else:
-            self.update_status_label() # Revert status if save was cancelled or failed
-
-    # --- Core Logic ---
-
-    def start_recording(self):
-        record_rect = self.get_recording_rect()
-        if record_rect.width() <= 0 or record_rect.height() <= 0:
-            QMessageBox.warning(self, "Error", "The recording area is too small.")
-            return
-
-        self.clear_frames(confirm=False)
-        self.is_recording = True
-        self.is_paused = False
-        self.pause_btn.setText("Pause")
-
-        self.record_timer = RecordingTimer(record_rect, self.fps_spin.value())
-        self.record_timer.frame_captured.connect(self.add_frame)
-        self.record_timer.start()
-        self._update_ui_for_mode()
-
-    def stop_recording(self):
-        if self.record_timer:
-            self.record_timer.stop()
-            self.record_timer.wait()
-            self.record_timer = None
-        self.is_recording = False
-        self.is_paused = False
-
-        if self.frames:
-            self.preview_widget.set_frames(self.frames, self.fps_spin.value())
-        
-        self._update_ui_for_mode()
-
-    def clear_frames(self, confirm: bool = True):
-        if not self.frames:
-            # If called with confirm=False, directly switch to ready mode
-            if not confirm:
-                self._update_ui_for_mode()
-            return
-
-        if confirm:
-            reply = QMessageBox.question(self, "New Recording",
-                "Discard current frames and start a new recording session?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-
-        self.frames.clear()
-        self.preview_widget.set_frames([], self.fps_spin.value())
-        self.is_recording = False
-        self.is_paused = False
-        self._update_ui_for_mode()
-
-    def add_frame(self, image: QImage):
-        self.frames.append(image)
-        if self.is_recording:
-            self.update_status_label()
-            
-    def _update_save_progress(self, value: int):
-        """Updates the status label with GIF saving progress."""
-        self.status_label.setText(f"Saving GIF: Processing frame {value}...")
-
-    # --- Helper Methods ---
-
-    def update_mask(self):
-        """Creates the transparent 'hole' for the recording area."""
-        full_window_rgn = QRegion(self.rect())
-        # Shrink the hole by 1 pixel on each side to ensure the frame is never recorded
-        hole_width = self.width() - (2 * FRAME_THICKNESS) - 2
-        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS) - 2
-        hole_width = max(0, hole_width)
-        hole_height = max(0, hole_height)
-
-        transparent_hole_rgn = QRegion(
-            FRAME_THICKNESS + 1, FRAME_THICKNESS + 1, hole_width, hole_height
-        )
-        final_mask_rgn = full_window_rgn.subtracted(transparent_hole_rgn)
-        self.setMask(final_mask_rgn)
-
-    def update_status_label(self):
-        if self.is_recording:
-            status = f"Paused. ({len(self.frames)} frames)" if self.is_paused else f"Recording... ({len(self.frames)} frames)"
-            self.status_label.setText(status)
-        elif self.frames:
-             self.status_label.setText(f"Done. {len(self.frames)} frames. Ready to edit or save.")
-        else:
-            rect = self.get_recording_rect()
-            if rect.width() > 0 and rect.height() > 0:
-                self.status_label.setText(f"Ready. Area: {rect.width()} × {rect.height()}")
-            else:
-                self.status_label.setText("Please enlarge the window.")
-                
-    def get_recording_rect(self) -> QRect:
-        """Calculates the screen coordinates of the transparent recording area."""
-        global_pos = self.mapToGlobal(QPoint(0, 0))
-        # Shrink the recording rectangle by 1 pixel on each side to ensure the frame is never recorded
-        hole_width = self.width() - (2 * FRAME_THICKNESS) - 2
-        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS) - 2
-        return QRect(
-            global_pos.x() + FRAME_THICKNESS + 1,
-            global_pos.y() + FRAME_THICKNESS + 1,
-            hole_width,
-            hole_height
-        )
-
-    # --- Global Hotkey Management ---
-
-    def _setup_global_hotkeys(self):
-        """Sets up global hotkeys for record, pause, and stop with error handling."""
-        try:
-            # Define hotkeys. Using a combination to avoid common single key conflicts.
-            record_hotkey = '<ctrl>+<alt>+r'
-            pause_hotkey = '<ctrl>+<alt>+p'
-            stop_hotkey = '<ctrl>+<alt>+s'
-
-            # Connect signals to the actual handler methods
-            self.record_signal.connect(self.handle_record_button)
-            self.pause_signal.connect(self.handle_pause_button)
-            self.stop_signal.connect(self.handle_stop_button)
-
-            # Create wrapper functions that emit the signals
-            def on_record_hotkey():
-                if not self._is_closing:
-                    self.record_signal.emit()
-
-            def on_pause_hotkey():
-                if not self._is_closing:
-                    self.pause_signal.emit()
-
-            def on_stop_hotkey():
-                if not self._is_closing:
-                    self.stop_signal.emit()
-
-            # Create a mapping of hotkeys to their respective wrapper methods
-            hotkey_map = {
-                record_hotkey: on_record_hotkey,
-                pause_hotkey: on_pause_hotkey,
-                stop_hotkey: on_stop_hotkey
-            }
-
-            # Create a global listener with error handling
-            self.hotkey_listener = keyboard.GlobalHotKeys(hotkey_map)
-            self.hotkey_listener.start()
-            self.hotkey_info_label.setText("Hotkeys: Ctrl+Alt+R (Record), Ctrl+Alt+P (Pause), Ctrl+Alt+S (Stop)")
-            
-        except Exception as e:
-            print(f"Failed to setup global hotkeys: {e}")
-            self.hotkey_info_label.setText("Hotkeys disabled (setup failed)")
-            self.hotkey_listener = None
-        
-        self.update_status_label() # Update status label to reflect initial state
+        # Clean up hotkeys
+        self.hotkey_manager.cleanup()
