@@ -32,8 +32,7 @@ The application provides a range of settings to control the quality and file siz
 *   **Enable Similarity Skip**: When enabled, the application automatically skips frames that are very similar to the previous one, significantly reducing file size for static or slow-moving content (between 40% and 70% for desktop recordings).
 
 ## Installation
-
-Download the executable:
+[Download](https://github.com/spinalcord/Square-Gif-Recorder/releases/tag/Release) the executable:
 
 Allow execution and run
 ```
