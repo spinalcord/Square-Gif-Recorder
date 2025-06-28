@@ -37,7 +37,7 @@ class PreviewWidget(QWidget):
         self.frame_label = QLabel("Frame: 0/0")
         playback_controls.addWidget(self.frame_label)
 
-        playback_controls.addWidget(QLabel("FPS (Speed):"))
+        playback_controls.addWidget(QLabel("Speed:"))
         self.preview_fps_spin = QSpinBox()
         self.preview_fps_spin.setRange(1, 60)
         self.preview_fps_spin.setValue(10)

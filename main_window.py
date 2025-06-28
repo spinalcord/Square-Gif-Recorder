@@ -58,9 +58,14 @@ class UIManager:
         self.main_window.update_status_label()
         self.main_window.update()
         
-        # Adjust window size if mode changed significantly
+        # NEU: Nur adjustSize() wenn keine gespeicherte Größe existiert
+        # oder wenn wir von READY zu EDITING wechseln (nicht von EDITING zu READY)
         if is_edit != self.main_window._last_mode_was_edit:
-            self.main_window.adjustSize()
+            # Nur auto-resize wenn wir keine gespeicherte Größe haben
+            # oder wenn wir zu EDITING wechseln (nicht von EDITING weg)
+            if (self.main_window._saved_window_size is None or 
+                (is_edit and not self.main_window._last_mode_was_edit)):
+                self.main_window.adjustSize()
         
         self.main_window._last_mode_was_edit = is_edit
     
@@ -249,6 +254,10 @@ class GifRecorderMainWindow(QMainWindow):
         self.drag_pos = QPoint()
         self._last_mode_was_edit = True
         self._is_closing = False
+        
+        # NEU: Speicherung der Fenstergröße
+        self._saved_window_size: Optional[QSize] = None
+        self._saved_window_pos: Optional[QPoint] = None
         
         # Initialize managers
         self.ui_manager = UIManager(self)
@@ -479,6 +488,19 @@ class GifRecorderMainWindow(QMainWindow):
             self.update_mask()
             self.update()
 
+    # NEU: Methoden zum Speichern und Wiederherstellen der Fenstergröße
+    def _save_window_size(self) -> None:
+        """Speichere die aktuelle Fenstergröße und Position."""
+        self._saved_window_size = self.size()
+        self._saved_window_pos = self.pos()
+    
+    def _restore_window_size(self) -> None:
+        """Stelle die gespeicherte Fenstergröße wieder her."""
+        if self._saved_window_size is not None:
+            self.resize(self._saved_window_size)
+        if self._saved_window_pos is not None:
+            self.move(self._saved_window_pos)
+
     # Event Handlers
     def _on_record_clicked(self) -> None:
         """Handle record button click."""
@@ -526,6 +548,9 @@ class GifRecorderMainWindow(QMainWindow):
     # Core Recording Logic
     def _start_recording(self) -> None:
         """Start a new recording session."""
+        # NEU: Speichere Fenstergröße vor dem Aufnahmestart
+        self._save_window_size()
+        
         record_rect = self.get_recording_rect()
         
         if self.recording_manager.start(record_rect, self.fps_spin.value()):
@@ -564,7 +589,14 @@ class GifRecorderMainWindow(QMainWindow):
         self.frames.clear()
         self.preview_widget.set_frames([], self.fps_spin.value())
         self.recording_manager._mode = AppMode.READY
+        
+        # Update UI first
         self.ui_manager.update_for_mode(AppMode.READY)
+        
+        # NEU: Stelle die gespeicherte Fenstergröße NACH dem UI-Update wieder her
+        # Verwende QTimer um sicherzustellen dass es nach adjustSize() passiert
+        if self._saved_window_size is not None:
+            QTimer.singleShot(10, self._restore_window_size)
     
     # Helper Methods
     def _get_quality_settings(self) -> QualitySettings:
@@ -645,12 +677,16 @@ class GifRecorderMainWindow(QMainWindow):
     def get_recording_rect(self) -> QRect:
         """Calculate screen coordinates of the recording area."""
         global_pos = self.mapToGlobal(QPoint(0, 0))
-        hole_width = self.width() - (2 * FRAME_THICKNESS) - 2
-        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS) - 2
+        
+        # Mehr Sicherheitsabstand hinzufügen
+        safety_margin = 3  # Zusätzliche Pixel Abstand
+        
+        hole_width = self.width() - (2 * FRAME_THICKNESS) - 2 - (2 * safety_margin)
+        hole_height = self.height() - self.controls_frame.height() - (2 * FRAME_THICKNESS) - 2 - (2 * safety_margin)
         
         return QRect(
-            global_pos.x() + FRAME_THICKNESS + 1,
-            global_pos.y() + FRAME_THICKNESS + 1,
+            global_pos.x() + FRAME_THICKNESS + 1 + safety_margin,
+            global_pos.y() + FRAME_THICKNESS + 1 + safety_margin,
             max(0, hole_width),
             max(0, hole_height)
         )

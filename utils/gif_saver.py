@@ -83,29 +83,42 @@ class GifSettings:
             return Image.Resampling.LANCZOS
         return Image.LANCZOS
 
-
 class FrameSimilarityDetector:
-    """Erkennt ähnliche Frames um sie zu überspringen."""
+    """Verbesserte Erkennung ähnlicher Frames mit mehreren Methoden."""
     
     def __init__(self, threshold: float = 0.95):
         self.threshold = threshold
         self.last_frame_hash: Optional[str] = None
         self.last_processed_image: Optional[Image.Image] = None
+        self.last_histogram = None
+        self.last_structural_hash = None
     
     def is_similar_to_previous(self, current_image: Image.Image) -> bool:
         if self.last_processed_image is None:
             self._update_reference(current_image)
             return False  # Erstes Frame immer behalten
         
-        # Schnelle Hash-Prüfung zuerst
+        # 1. Schnelle Hash-Prüfung zuerst (identische Frames)
         current_hash = self._calculate_image_hash(current_image)
         if current_hash == self.last_frame_hash:
             return True  # Identische Frames überspringen
         
-        # Detaillierte Ähnlichkeitsprüfung
-        similarity = self._calculate_similarity(self.last_processed_image, current_image)
+        # 2. Struktureller Hash für große Änderungen
+        current_structural = self._calculate_structural_hash(current_image)
+        if current_structural != self.last_structural_hash:
+            # Große strukturelle Änderung -> Frame behalten
+            self._update_reference(current_image)
+            return False
         
-        if similarity < self.threshold:
+        # 3. Detaillierte Ähnlichkeitsprüfung mit mehreren Methoden
+        similarity_scores = self._calculate_multiple_similarities(
+            self.last_processed_image, current_image
+        )
+        
+        # Gewichteter Durchschnitt der verschiedenen Ähnlichkeitsmetriken
+        combined_similarity = self._combine_similarities(similarity_scores)
+        
+        if combined_similarity < self.threshold:
             # Frame ist unterschiedlich genug -> behalten
             self._update_reference(current_image)
             return False
@@ -113,54 +126,215 @@ class FrameSimilarityDetector:
             # Frame ist zu ähnlich -> überspringen
             return True
     
-    def _update_reference(self, image: Image.Image) -> None:
-        """Aktualisiert das Referenz-Frame."""
-        self.last_processed_image = image.copy()
-        self.last_frame_hash = self._calculate_image_hash(image)
-    
-    def _calculate_image_hash(self, image: Image.Image) -> str:
-        """Berechnet einen schnellen Hash für das Bild."""
-        # Bild auf kleine Größe reduzieren für schnellen Vergleich
-        small_image = image.resize((8, 8), Image.Resampling.NEAREST if hasattr(Image, 'Resampling') else Image.NEAREST)
-        # Hash der Pixeldaten
-        return hashlib.md5(small_image.tobytes()).hexdigest()
-    
-    def _calculate_similarity(self, img1: Image.Image, img2: Image.Image) -> float:
-        """
-        Berechnet die Ähnlichkeit zwischen zwei Bildern.
+    def _calculate_multiple_similarities(self, img1: Image.Image, img2: Image.Image) -> dict:
+        """Berechnet verschiedene Ähnlichkeitsmetriken."""
+        similarities = {}
         
-        Returns:
-            Wert zwischen 0 (völlig unterschiedlich) und 1 (identisch)
-        """
         try:
-            # Beide Bilder auf gleiche Größe bringen falls nötig
+            # Bilder auf gleiche Größe bringen
             if img1.size != img2.size:
                 resample = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
                 img2 = img2.resize(img1.size, resample)
             
-            # Differenzbild berechnen
-            diff = ImageChops.difference(img1, img2)
+            # 1. Pixel-basierte Ähnlichkeit (wie bisher)
+            similarities['pixel'] = self._calculate_pixel_similarity(img1, img2)
             
-            # Statistiken der Differenz
-            stat = ImageStat.Stat(diff)
+            # 2. Histogramm-Ähnlichkeit
+            similarities['histogram'] = self._calculate_histogram_similarity(img1, img2)
             
-            # Durchschnittliche Differenz über alle Kanäle
-            avg_diff = sum(stat.mean) / len(stat.mean)
+            # 3. Strukturelle Ähnlichkeit (vereinfacht)
+            similarities['structural'] = self._calculate_structural_similarity(img1, img2)
             
-            # In Ähnlichkeitswert umwandeln (255 = max Differenz)
-            similarity = 1.0 - (avg_diff / 255.0)
-            
-            return max(0.0, min(1.0, similarity))
+            # 4. Lokale Änderungen (für Textbearbeitung wichtig)
+            similarities['local_changes'] = self._calculate_local_changes_similarity(img1, img2)
             
         except Exception as e:
             print(f"Fehler bei Ähnlichkeitsberechnung: {e}")
-            return 0.0  # Bei Fehler als unterschiedlich behandeln
+            # Bei Fehler als unterschiedlich behandeln
+            similarities = {'pixel': 0.0, 'histogram': 0.0, 'structural': 0.0, 'local_changes': 0.0}
+        
+        return similarities
+    
+    def _calculate_pixel_similarity(self, img1: Image.Image, img2: Image.Image) -> float:
+        """Ursprüngliche pixel-basierte Ähnlichkeit."""
+        diff = ImageChops.difference(img1, img2)
+        stat = ImageStat.Stat(diff)
+        avg_diff = sum(stat.mean) / len(stat.mean)
+        return max(0.0, min(1.0, 1.0 - (avg_diff / 255.0)))
+    
+    def _calculate_histogram_similarity(self, img1: Image.Image, img2: Image.Image) -> float:
+        """Histogramm-basierte Ähnlichkeit."""
+        try:
+            # RGB-Histogramme berechnen
+            hist1 = img1.convert('RGB').histogram()
+            hist2 = img2.convert('RGB').histogram()
+            
+            # Chi-Quadrat-Distanz zwischen Histogrammen
+            chi_squared = 0
+            for i in range(len(hist1)):
+                if hist1[i] + hist2[i] > 0:
+                    chi_squared += ((hist1[i] - hist2[i]) ** 2) / (hist1[i] + hist2[i])
+            
+            # Normalisieren und in Ähnlichkeit umwandeln
+            max_chi_squared = len(hist1) * 2  # Theoretisches Maximum
+            similarity = 1.0 - min(chi_squared / max_chi_squared, 1.0)
+            
+            return max(0.0, min(1.0, similarity))
+            
+        except Exception:
+            return 0.0
+    
+    def _calculate_structural_similarity(self, img1: Image.Image, img2: Image.Image) -> float:
+        """Vereinfachte strukturelle Ähnlichkeit."""
+        try:
+            # Bilder zu Graustufen konvertieren und verkleinern für Performance
+            gray1 = img1.convert('L').resize((64, 64), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
+            gray2 = img2.convert('L').resize((64, 64), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
+            
+            # Kanten mit einfachem Sobel-ähnlichen Filter
+            def detect_edges(img):
+                import numpy as np
+                arr = np.array(img)
+                # Horizontale und vertikale Gradienten
+                grad_x = np.abs(arr[1:, :] - arr[:-1, :])
+                grad_y = np.abs(arr[:, 1:] - arr[:, :-1])
+                # Kanten kombinieren (kleinere Größe nehmen)
+                min_h, min_w = min(grad_x.shape[0], grad_y.shape[0]), min(grad_x.shape[1], grad_y.shape[1])
+                edges = grad_x[:min_h, :min_w] + grad_y[:min_h, :min_w]
+                return edges
+            
+            edges1 = detect_edges(gray1)
+            edges2 = detect_edges(gray2)
+            
+            # Korrelation zwischen Kantenkarten
+            flat1 = edges1.flatten()
+            flat2 = edges2.flatten()
+            
+            if len(flat1) == 0 or len(flat2) == 0:
+                return 0.0
+            
+            # Pearson-Korrelationskoeffizient
+            mean1, mean2 = np.mean(flat1), np.mean(flat2)
+            std1, std2 = np.std(flat1), np.std(flat2)
+            
+            if std1 == 0 or std2 == 0:
+                return 1.0 if np.array_equal(flat1, flat2) else 0.0
+            
+            correlation = np.mean((flat1 - mean1) * (flat2 - mean2)) / (std1 * std2)
+            return max(0.0, min(1.0, (correlation + 1.0) / 2.0))  # Normalisierung auf [0,1]
+            
+        except Exception:
+            return 0.0
+    
+    def _calculate_local_changes_similarity(self, img1: Image.Image, img2: Image.Image) -> float:
+        """Bewertet lokale Änderungen - wichtig für Textbearbeitung."""
+        try:
+            # Differenzbild berechnen
+            diff = ImageChops.difference(img1, img2)
+            
+            # Bild in Blöcke unterteilen (z.B. 8x8 Pixel)
+            block_size = 8
+            width, height = diff.size
+            
+            total_blocks = 0
+            changed_blocks = 0
+            
+            for y in range(0, height - block_size + 1, block_size):
+                for x in range(0, width - block_size + 1, block_size):
+                    # Block extrahieren
+                    block = diff.crop((x, y, x + block_size, y + block_size))
+                    
+                    # Durchschnittliche Änderung in diesem Block
+                    stat = ImageStat.Stat(block)
+                    avg_change = sum(stat.mean) / len(stat.mean)
+                    
+                    total_blocks += 1
+                    
+                    # Block als "geändert" betrachten wenn Änderung über Schwellenwert
+                    if avg_change > 10:  # Schwellenwert für "signifikante" Änderung
+                        changed_blocks += 1
+            
+            if total_blocks == 0:
+                return 1.0
+            
+            # Anteil der unveränderten Blöcke
+            unchanged_ratio = (total_blocks - changed_blocks) / total_blocks
+            
+            return max(0.0, min(1.0, unchanged_ratio))
+            
+        except Exception:
+            return 0.0
+    
+    def _combine_similarities(self, similarities: dict) -> float:
+        """Kombiniert verschiedene Ähnlichkeitsmetriken gewichtet."""
+        # Gewichte für verschiedene Metriken
+        weights = {
+            'pixel': 0.2,          # Weniger Gewicht auf reine Pixeldifferenz
+            'histogram': 0.2,      # Farbverteilung
+            'structural': 0.3,     # Strukturelle Ähnlichkeit
+            'local_changes': 0.3   # Lokale Änderungen (wichtig für Text)
+        }
+        
+        weighted_sum = 0.0
+        total_weight = 0.0
+        
+        for metric, similarity in similarities.items():
+            if metric in weights:
+                weight = weights[metric]
+                weighted_sum += similarity * weight
+                total_weight += weight
+        
+        if total_weight == 0:
+            return 0.0
+        
+        return weighted_sum / total_weight
+    
+    def _calculate_structural_hash(self, image: Image.Image) -> str:
+        """Berechnet einen Hash basierend auf Bildstruktur (Kanten)."""
+        try:
+            # Zu Graustufen und kleine Größe für schnellen Vergleich
+            gray = image.convert('L').resize((16, 16), Image.Resampling.NEAREST if hasattr(Image, 'Resampling') else Image.NEAREST)
+            
+            # Einfache Kantenerkennung durch Differenzen
+            import numpy as np
+            arr = np.array(gray)
+            
+            # Horizontale und vertikale Gradienten
+            grad_x = arr[1:, :] - arr[:-1, :]
+            grad_y = arr[:, 1:] - arr[:, :-1]
+            
+            # Kombinierte Gradientenstärke
+            min_h, min_w = min(grad_x.shape[0], grad_y.shape[0]), min(grad_x.shape[1], grad_y.shape[1])
+            combined = np.abs(grad_x[:min_h, :min_w]) + np.abs(grad_y[:min_h, :min_w])
+            
+            # Binarisierung (starke Kanten vs. schwache)
+            threshold = np.mean(combined) + np.std(combined)
+            binary = (combined > threshold).astype(np.uint8)
+            
+            # Hash der Binärstruktur
+            return hashlib.md5(binary.tobytes()).hexdigest()
+            
+        except Exception:
+            # Fallback auf einfachen Hash
+            return self._calculate_image_hash(image)
+    
+    def _update_reference(self, image: Image.Image) -> None:
+        """Aktualisiert das Referenz-Frame."""
+        self.last_processed_image = image.copy()
+        self.last_frame_hash = self._calculate_image_hash(image)
+        self.last_structural_hash = self._calculate_structural_hash(image)
+    
+    def _calculate_image_hash(self, image: Image.Image) -> str:
+        """Berechnet einen schnellen Hash für das Bild."""
+        small_image = image.resize((8, 8), Image.Resampling.NEAREST if hasattr(Image, 'Resampling') else Image.NEAREST)
+        return hashlib.md5(small_image.tobytes()).hexdigest()
     
     def reset(self) -> None:
         """Setzt den Detektor zurück."""
         self.last_frame_hash = None
         self.last_processed_image = None
-
+        self.last_histogram = None
+        self.last_structural_hash = None
 
 class ImageConverter:
     """Handles conversion between QImage and PIL Image formats."""
