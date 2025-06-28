@@ -1,11 +1,10 @@
-# core/recording_timer.py
-
 import time
 from utils.qt_imports import QThread, pyqtSignal, QRect, QImage, QApplication, QCursor, QPainter, QPoint, QPixmap, Qt, QPen
 
 class RecordingTimer(QThread):
     """
     A QThread that captures frames from a specific screen region at a given FPS.
+    Now with proper multi-monitor support.
     """
     frame_captured = pyqtSignal(QImage)
 
@@ -15,11 +14,54 @@ class RecordingTimer(QThread):
         self.fps = fps
         self.is_running = False
         self.is_paused = False
+        # Ermittle den korrekten Bildschirm basierend auf dem Aufnahmerechteck
+        self.target_screen = self._get_screen_for_rect(rect)
+
+    def _get_screen_for_rect(self, rect: QRect):
+        """
+        Ermittelt den Bildschirm, der das Aufnahmerechteck enthält.
+        Falls das Rechteck über mehrere Bildschirme geht, wird der Bildschirm
+        mit der größten Überschneidung gewählt.
+        """
+        screens = QApplication.screens()
+        best_screen = QApplication.primaryScreen()  # Fallback
+        max_intersection_area = 0
+        
+        for screen in screens:
+            screen_geometry = screen.geometry()
+            intersection = rect.intersected(screen_geometry)
+            
+            if not intersection.isEmpty():
+                intersection_area = intersection.width() * intersection.height()
+                if intersection_area > max_intersection_area:
+                    max_intersection_area = intersection_area
+                    best_screen = screen
+        
+        print(f"Recording on screen: {best_screen.name()} at {best_screen.geometry()}")
+        return best_screen
+
+    def _convert_to_screen_coordinates(self, global_rect: QRect):
+        """
+        Konvertiert globale Koordinaten zu bildschirmspezifischen Koordinaten.
+        """
+        screen_geometry = self.target_screen.geometry()
+        
+        # Berechne relative Koordinaten zum gewählten Bildschirm
+        relative_x = global_rect.x() - screen_geometry.x()
+        relative_y = global_rect.y() - screen_geometry.y()
+        
+        return QRect(relative_x, relative_y, global_rect.width(), global_rect.height())
 
     def run(self):
         self.is_running = True
         interval = 1.0 / self.fps if self.fps > 0 else 0.1
-        screen = QApplication.primaryScreen()
+        
+        # Konvertiere zu bildschirmspezifischen Koordinaten
+        screen_rect = self._convert_to_screen_coordinates(self.rect)
+        
+        print(f"Global rect: {self.rect}")
+        print(f"Screen rect: {screen_rect}")
+        print(f"Screen geometry: {self.target_screen.geometry()}")
 
         while self.is_running:
             if self.is_paused:
@@ -27,11 +69,25 @@ class RecordingTimer(QThread):
                 continue
 
             start_time = time.time()
-            pixmap = screen.grabWindow(0, self.rect.x(), self.rect.y(), self.rect.width(), self.rect.height())
+            
+            # Verwende den korrekten Bildschirm für die Aufnahme
+            pixmap = self.target_screen.grabWindow(
+                0,  # Desktop window ID (0 für den gesamten Bildschirm)
+                screen_rect.x(), 
+                screen_rect.y(), 
+                screen_rect.width(), 
+                screen_rect.height()
+            )
+            
+            # Überprüfe ob die Aufnahme erfolgreich war
+            if pixmap.isNull():
+                print(f"Warning: Failed to capture screen area {screen_rect}")
+                self.msleep(100)
+                continue
 
             # Draw mouse cursor onto the pixmap
             cursor_pos = QCursor.pos()
-            # Check if the cursor is within the recording rectangle
+            # Check if the cursor is within the recording rectangle (globale Koordinaten)
             if self.rect.contains(cursor_pos):
                 painter = QPainter(pixmap)
                 # Calculate cursor position relative to the grabbed pixmap
