@@ -85,43 +85,8 @@ class RecordingTimer(QThread):
                 self.msleep(100)
                 continue
 
-            # Draw mouse cursor onto the pixmap
             cursor_pos = QCursor.pos()
-            # Check if the cursor is within the recording rectangle (globale Koordinaten)
-            if self.rect.contains(cursor_pos):
-                painter = QPainter(pixmap)
-                # Calculate cursor position relative to the grabbed pixmap
-                relative_cursor_pos = cursor_pos - self.rect.topLeft()
-                
-                # Get the current cursor pixmap. If no override cursor, use the default.
-                current_cursor = QApplication.overrideCursor()
-                if current_cursor and current_cursor.shape() == Qt.CursorShape.BitmapCursor:
-                    cursor_pixmap = current_cursor.pixmap()
-                    hotspot = current_cursor.hotSpot()
-                else:
-                    # Fallback for default cursor or if overrideCursor is not a bitmap
-                    # This is a simplified representation; a real implementation might need
-                    # to render a default arrow cursor or use platform-specific methods.
-                    # For now, we'll just draw a small dot or a simple cross.
-                    # A more robust solution would involve getting the system cursor image.
-                    # For demonstration, let's draw a simple cross.
-                    cursor_pixmap = QPixmap(32, 32)
-                    cursor_pixmap.fill(Qt.GlobalColor.transparent)
-                    temp_painter = QPainter(cursor_pixmap)
-                    # Draw white outline
-                    temp_painter.setPen(QPen(Qt.GlobalColor.white, 8)) # Thicker white pen for outline
-                    temp_painter.drawLine(0, 16, 31, 16)
-                    temp_painter.drawLine(16, 0, 16, 31)
-                    # Draw black cross on top
-                    temp_painter.setPen(QPen(Qt.GlobalColor.black, 4)) # Original black pen
-                    temp_painter.drawLine(0, 16, 31, 16)
-                    temp_painter.drawLine(16, 0, 16, 31)
-                    temp_painter.end()
-                    hotspot = QPoint(16, 16) # Center of the cross
-                
-                if cursor_pixmap:
-                    painter.drawPixmap(relative_cursor_pos - hotspot, cursor_pixmap)
-                painter.end()
+            self.draw_cursor_in_recording(pixmap, cursor_pos)
 
             self.frame_captured.emit(pixmap.toImage())
 
@@ -140,3 +105,40 @@ class RecordingTimer(QThread):
     def resume(self):
         """Resumes frame capturing."""
         self.is_paused = False
+    def draw_cursor(self, painter, cursor_pos):
+        """Zeichnet einen einfachen Mauszeiger (Pfeil) an der angegebenen Position."""
+        # Pfeil-Punkte definieren
+        arrow_points = [
+            QPoint(0, 0), QPoint(0, 16), QPoint(6, 12), QPoint(10, 18),
+            QPoint(12, 16), QPoint(8, 10), QPoint(16, 8), QPoint(0, 0)
+        ]
+        
+        # Punkte zur Cursor-Position verschieben
+        translated_points = [cursor_pos + point for point in arrow_points]
+        
+        # Weißer Rand
+        painter.setPen(QPen(Qt.GlobalColor.white, 2))
+        painter.setBrush(Qt.GlobalColor.white)
+        painter.drawPolygon(translated_points)
+        
+        # Schwarzer Pfeil
+        painter.setPen(QPen(Qt.GlobalColor.black, 1))
+        painter.setBrush(Qt.GlobalColor.black)
+        inner_points = [
+            QPoint(1, 1), QPoint(1, 14), QPoint(6, 11), QPoint(9, 16),
+            QPoint(11, 15), QPoint(7, 9), QPoint(14, 7), QPoint(1, 1)
+        ]
+        inner_translated = [cursor_pos + point for point in inner_points]
+        painter.drawPolygon(inner_translated)
+
+    def draw_cursor_in_recording(self, pixmap, cursor_pos):
+        """Zeichnet den Cursor ins aufgenommene Bild."""
+        # Check if the cursor is within the recording rectangle
+        if self.rect.contains(cursor_pos):
+            painter = QPainter(pixmap)
+            # Calculate cursor position relative to the grabbed pixmap
+            relative_cursor_pos = cursor_pos - self.rect.topLeft()
+            
+            # Zeichne den Cursor
+            self.draw_cursor(painter, relative_cursor_pos)
+            painter.end()

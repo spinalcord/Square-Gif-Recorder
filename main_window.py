@@ -1174,6 +1174,11 @@ class GifRecorderMainWindow(QMainWindow):
     
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press for window dragging."""
+        # Prevent dragging during recording or pause
+        if self.recording_manager.mode in [AppMode.RECORDING, AppMode.PAUSED]:
+            event.ignore()
+            return
+        
         if event.button() == Qt.MouseButton.LeftButton:
             if QT_VERSION == 6:
                 self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -1183,6 +1188,11 @@ class GifRecorderMainWindow(QMainWindow):
     
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """Handle mouse move for window dragging."""
+        # Prevent dragging during recording or pause
+        if self.recording_manager.mode in [AppMode.RECORDING, AppMode.PAUSED]:
+            event.ignore()
+            return
+
         if event.buttons() == Qt.MouseButton.LeftButton and not self.drag_pos.isNull():
             if QT_VERSION == 6:
                 self.move(event.globalPosition().toPoint() - self.drag_pos)

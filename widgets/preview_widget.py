@@ -19,10 +19,7 @@ class PreviewWidget(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 5, 0, 0)
-
         self.preview_label = QLabel("Preview will be displayed here after recording.")
-        self.preview_label.setMinimumSize(300, 150)
         self.preview_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_label.setStyleSheet("border: 1px solid gray; background-color: black; color: white;")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -176,6 +173,9 @@ class PreviewWidget(QWidget):
         # Update the preview to the current slider position being dragged
         self.current_frame_index = self.sender().value()
         self.update_preview()
+
+        self.start_slider.blockSignals(False)
+        self.end_slider.blockSignals(False)
 
         self.start_slider.blockSignals(False)
         self.end_slider.blockSignals(False)
