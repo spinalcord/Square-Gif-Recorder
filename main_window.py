@@ -36,6 +36,7 @@ class HotkeyConfig:
     record: str = '<ctrl>+<alt>+r'
     pause: str = '<ctrl>+<alt>+p'
     stop: str = '<ctrl>+<alt>+s'
+    record_frame: str = '<ctrl>+<alt>+f'  # NEW: Hotkey for single frame recording
 
 
 class UIManager:
@@ -75,15 +76,26 @@ class UIManager:
         if mode == AppMode.EDITING:
             mw.record_btn.setText("New")
             mw.record_btn.setToolTip("Discard current frames and start a new recording.")
+            mw.record_frame_btn.setVisible(False)  # NEW: Hide in edit mode
         elif mode == AppMode.RECORDING:
             mw.record_btn.setText("Stop")
             mw.record_btn.setToolTip("")
-            mw.pause_btn.setText("Pause")
+            # Im Frame-by-Frame Modus zeigen wir "Resume" statt "Pause"
+            if mw.recording_manager.is_frame_by_frame_mode:
+                mw.pause_btn.setText("Resume")
+            else:
+                mw.pause_btn.setText("Pause")
+            mw.record_frame_btn.setVisible(False)  # NEW: Disable during continuous recording
         elif mode == AppMode.PAUSED:
+            # In PAUSED mode, immer sowohl Resume als auch Record 1 Frame anzeigen
             mw.pause_btn.setText("Resume")
+            mw.record_frame_btn.setVisible(True)   # NEW: Always show when paused
+            mw.record_frame_btn.setEnabled(True)
         else:  # READY
             mw.record_btn.setText("Record")
             mw.record_btn.setToolTip("")
+            mw.record_frame_btn.setVisible(True)   # NEW: Show in ready mode
+            mw.record_frame_btn.setEnabled(True)
     
     def _update_visibility(self, is_edit: bool, is_recording: bool) -> None:
         """Update widget visibility based on mode."""
@@ -135,7 +147,8 @@ class HotkeyManager:
             hotkey_map = {
                 self.config.record: self._safe_emit_record,
                 self.config.pause: self._safe_emit_pause,
-                self.config.stop: self._safe_emit_stop
+                self.config.stop: self._safe_emit_stop,
+                self.config.record_frame: self._safe_emit_record_frame  # NEW
             }
             
             self.listener = keyboard.GlobalHotKeys(hotkey_map)
@@ -171,11 +184,16 @@ class HotkeyManager:
         if not self.main_window._is_closing:
             self.main_window.stop_signal.emit()
     
+    def _safe_emit_record_frame(self) -> None:  # NEW
+        if not self.main_window._is_closing:
+            self.main_window.record_frame_signal.emit()
+    
     @property
     def status_text(self) -> str:
         """Get status text for hotkeys."""
         if self._is_active:
-            return f"Hotkeys: {self.config.record} (Record), {self.config.pause} (Pause), {self.config.stop} (Stop)"
+            return (f"Hotkeys: {self.config.record} (Record), {self.config.pause} (Pause), "
+                   f"{self.config.stop} (Stop), {self.config.record_frame} (Record 1 Frame)")
         return "Hotkeys disabled (setup failed)"
 
 
@@ -186,10 +204,15 @@ class RecordingManager:
         self.main_window = main_window
         self.timer: Optional[RecordingTimer] = None
         self._mode = AppMode.READY
+        self._frame_by_frame_mode = False  # NEW: Track if we're in frame-by-frame mode
     
     @property
     def mode(self) -> AppMode:
         return self._mode
+    
+    @property
+    def is_frame_by_frame_mode(self) -> bool:  # NEW
+        return self._frame_by_frame_mode
     
     def start(self, record_rect: QRect, fps: int) -> bool:
         """Start recording. Returns True if successful."""
@@ -199,11 +222,59 @@ class RecordingManager:
         
         self.main_window.clear_frames(confirm=False)
         self._mode = AppMode.RECORDING
+        self._frame_by_frame_mode = False  # NEW: Normal recording mode
         
         self.timer = RecordingTimer(record_rect, fps)
         self.timer.frame_captured.connect(self.main_window.add_frame)
         self.timer.start()
         return True
+    
+    def start_frame_by_frame(self, record_rect: QRect, fps: int) -> bool:  # NEW
+        """Start frame-by-frame recording. Returns True if successful."""
+        if record_rect.width() <= 0 or record_rect.height() <= 0:
+            QMessageBox.warning(self.main_window, "Error", "The recording area is too small.")
+            return False
+        
+        # Only clear frames if we're starting fresh (not already in frame-by-frame mode)
+        if not self._frame_by_frame_mode and self._mode == AppMode.READY:
+            self.main_window.clear_frames(confirm=False)
+        
+        # Always set frame-by-frame mode when this method is called
+        self._frame_by_frame_mode = True
+        
+        # If no timer exists or we're in READY mode, create new timer
+        if not self.timer or self._mode == AppMode.READY:
+            self.timer = RecordingTimer(record_rect, fps)
+            self.timer.frame_captured.connect(self.main_window.add_frame)
+            self.timer.start()
+            self.timer.pause()  # Immediately pause
+            self._mode = AppMode.PAUSED
+            
+            # Capture the first frame immediately
+            QTimer.singleShot(50, self._capture_single_frame)
+        elif self._mode == AppMode.PAUSED:
+            # Capture one frame by temporarily resuming and pausing again
+            self._capture_single_frame()
+        
+        return True
+    
+    def _capture_single_frame(self) -> None:  # NEW
+        """Capture a single frame by briefly resuming and pausing."""
+        if self.timer and self._mode == AppMode.PAUSED:
+            # Temporarily resume to capture one frame
+            self.timer.resume()
+            self._mode = AppMode.RECORDING
+            
+            # Pause again after a very short time to capture just one frame
+            QTimer.singleShot(100, self._pause_after_single_frame)
+    
+    def _pause_after_single_frame(self) -> None:  # NEW
+        """Pause the timer after capturing a single frame."""
+        if self.timer and self._mode == AppMode.RECORDING and self._frame_by_frame_mode:
+            self.timer.pause()
+            self._mode = AppMode.PAUSED
+            # WICHTIG: UI nach dem Single-Frame Capture aktualisieren
+            self.main_window.ui_manager.update_for_mode(self._mode)
     
     def stop(self) -> None:
         """Stop recording."""
@@ -212,6 +283,7 @@ class RecordingManager:
             self.timer.wait()
             self.timer = None
         
+        self._frame_by_frame_mode = False  # NEW: Reset frame-by-frame mode
         self._mode = AppMode.EDITING if self.main_window.frames else AppMode.READY
     
     def pause(self) -> None:
@@ -225,6 +297,7 @@ class RecordingManager:
         if self._mode == AppMode.PAUSED and self.timer:
             self.timer.resume()
             self._mode = AppMode.RECORDING
+            self._frame_by_frame_mode = False  # NEW: Exit frame-by-frame mode when resuming
     
     def toggle_pause(self) -> None:
         """Toggle between pause and resume."""
@@ -588,17 +661,6 @@ class PreviewWidget(QWidget):
             QMessageBox.warning(self, "Delete Frame", "Cannot delete the last frame.")
             return
         
-        # Confirm deletion
-        # reply = QMessageBox.question(
-        #     self, "Delete Frame",
-        #     f"Are you sure you want to delete frame {self.current_frame_index + 1}?",
-        #     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        #     QMessageBox.StandardButton.No
-        # )
-        # 
-        # if reply != QMessageBox.StandardButton.Yes:
-        #     return
-        
         # Delete the frame
         del self.frames[self.current_frame_index]
         
@@ -679,6 +741,7 @@ class GifRecorderMainWindow(QMainWindow):
     record_signal = pyqtSignal()
     pause_signal = pyqtSignal()
     stop_signal = pyqtSignal()
+    record_frame_signal = pyqtSignal()  # NEW: Signal for single frame recording
 
     def __init__(self):
         super().__init__()
@@ -757,6 +820,7 @@ class GifRecorderMainWindow(QMainWindow):
         # Action buttons
         self.record_btn = QPushButton("Record")
         self.pause_btn = QPushButton("Pause")
+        self.record_frame_btn = QPushButton("Record 1 Frame")  # NEW: Single frame recording button
         self.save_btn = QPushButton("Save")
         self.quit_btn = QPushButton("Quit")
         
@@ -768,6 +832,7 @@ class GifRecorderMainWindow(QMainWindow):
         # Add to layout
         toolbar_layout.addWidget(self.record_btn)
         toolbar_layout.addWidget(self.pause_btn)
+        toolbar_layout.addWidget(self.record_frame_btn)  # NEW: Add the new button
         toolbar_layout.addWidget(QLabel("Recording FPS:"))
         toolbar_layout.addWidget(self.fps_spin)
         toolbar_layout.addWidget(self.save_btn)
@@ -880,6 +945,7 @@ class GifRecorderMainWindow(QMainWindow):
         # Button connections
         self.record_btn.clicked.connect(self._on_record_clicked)
         self.pause_btn.clicked.connect(self._on_pause_clicked)
+        self.record_frame_btn.clicked.connect(self._on_record_frame_clicked)  # NEW
         self.save_btn.clicked.connect(self._on_save_clicked)
         self.quit_btn.clicked.connect(self.confirm_quit)
         
@@ -887,6 +953,7 @@ class GifRecorderMainWindow(QMainWindow):
         self.record_signal.connect(self._on_record_clicked)
         self.pause_signal.connect(self._on_pause_clicked)
         self.stop_signal.connect(self._on_stop_clicked)
+        self.record_frame_signal.connect(self._on_record_frame_clicked)  # NEW
         
         # Application lifecycle
         QApplication.instance().aboutToQuit.connect(self._cleanup_resources)
@@ -955,8 +1022,32 @@ class GifRecorderMainWindow(QMainWindow):
         if self._is_closing:
             return
         
-        self.recording_manager.toggle_pause()
+        # Spezielle Behandlung für Frame-by-Frame Modus
+        if self.recording_manager.is_frame_by_frame_mode:
+            # Im Frame-by-Frame Modus bedeutet "Pause" Button-Klick = Resume zu kontinuierlicher Aufnahme
+            if self.recording_manager.mode == AppMode.PAUSED:
+                self.recording_manager.resume()  # Das setzt auch _frame_by_frame_mode = False
+            else:
+                self.recording_manager.pause()
+        else:
+            # Normale Pause/Resume Logik
+            self.recording_manager.toggle_pause()
+        
         self.ui_manager.update_for_mode(self.recording_manager.mode)
+    
+    def _on_record_frame_clicked(self) -> None:  # NEW: Handler for single frame recording
+        """Handle record frame button click."""
+        if self._is_closing:
+            return
+        
+        # Save window size before starting frame-by-frame recording
+        if self.recording_manager.mode == AppMode.READY:
+            self._save_window_size()
+        
+        record_rect = self.get_recording_rect()
+        
+        if self.recording_manager.start_frame_by_frame(record_rect, self.fps_spin.value()):
+            self.ui_manager.update_for_mode(self.recording_manager.mode)
     
     def _on_stop_clicked(self) -> None:
         """Handle stop action."""
@@ -1023,6 +1114,7 @@ class GifRecorderMainWindow(QMainWindow):
         self.frames.clear()
         self.preview_widget.set_frames([], self.fps_spin.value())
         self.recording_manager._mode = AppMode.READY
+        self.recording_manager._frame_by_frame_mode = False  # NEW: Reset frame-by-frame mode
         
         # Update UI first
         self.ui_manager.update_for_mode(AppMode.READY)
@@ -1095,9 +1187,15 @@ class GifRecorderMainWindow(QMainWindow):
         frame_count = len(self.frames)
         
         if mode == AppMode.RECORDING:
-            self.status_label.setText(f"Recording... ({frame_count} frames)")
+            if self.recording_manager.is_frame_by_frame_mode:
+                self.status_label.setText(f"Frame-by-frame mode: Recording... ({frame_count} frames)")
+            else:
+                self.status_label.setText(f"Recording... ({frame_count} frames)")
         elif mode == AppMode.PAUSED:
-            self.status_label.setText(f"Paused. ({frame_count} frames)")
+            if self.recording_manager.is_frame_by_frame_mode:
+                self.status_label.setText(f"Frame-by-frame mode: Ready for next frame. ({frame_count} frames)")
+            else:
+                self.status_label.setText(f"Paused. ({frame_count} frames)")
         elif mode == AppMode.EDITING:
             self.status_label.setText(f"Done. {frame_count} frames. Ready to edit or save.")
         else:  # READY
