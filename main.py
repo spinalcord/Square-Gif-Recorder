@@ -30,6 +30,12 @@ def set_dark_theme(app: QApplication):
     )
 
 def main():
+    # Ensure proper encoding for stdout/stderr for Unicode support
+    if sys.stdout.encoding != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+    if sys.stderr.encoding != 'utf-8':
+        sys.stderr.reconfigure(encoding='utf-8')
+
     # Allow Ctrl+C to work in the terminal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
