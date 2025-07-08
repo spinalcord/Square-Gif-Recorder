@@ -42,7 +42,7 @@ class UIManager:
         if mode == AppMode.EDITING:
             mw.record_btn.setText("New")
             mw.record_btn.setToolTip("Discard current frames and start a new recording.")
-            mw.record_frame_btn.setVisible(False)  # NEW: Hide in edit mode
+            mw.record_frame_btn.setEnabled(False)  # Disable in edit mode
         elif mode == AppMode.RECORDING:
             mw.record_btn.setText("Stop")
             mw.record_btn.setToolTip("")
@@ -51,7 +51,7 @@ class UIManager:
                 mw.pause_btn.setText("Resume")
             else:
                 mw.pause_btn.setText("Pause")
-            mw.record_frame_btn.setVisible(False)  # NEW: Disable during continuous recording
+            mw.record_frame_btn.setEnabled(False)  # Disable during continuous recording
         elif mode == AppMode.PAUSED:
             # In PAUSED mode, immer sowohl Resume als auch Record 1 Frame anzeigen
             mw.pause_btn.setText("Resume")
@@ -60,17 +60,15 @@ class UIManager:
         else:  # READY
             mw.record_btn.setText("Record")
             mw.record_btn.setToolTip("")
-            mw.record_frame_btn.setVisible(True)   # NEW: Show in ready mode
-            mw.record_frame_btn.setEnabled(True)
+            mw.record_frame_btn.setEnabled(True)   # Enable in ready mode
     
     def _update_visibility(self, is_edit: bool, is_recording: bool) -> None:
         """Update widget visibility based on mode."""
         mw = self.main_window
         
-        mw.pause_btn.setVisible(is_recording)
-        mw.preview_widget.setVisible(is_edit)
-        mw.quality_groupbox.setVisible(is_edit)
-        mw.save_btn.setVisible(is_edit)
+        mw.pause_btn.setEnabled(is_recording)
+        mw.edit_tabs.setVisible(is_edit) # NEW: Control visibility of the tab widget
+        mw.save_btn.setEnabled(is_edit)
         
         mw.fps_spin.setEnabled(not is_recording)
         mw.save_btn.setEnabled(is_edit)

@@ -58,8 +58,7 @@ class GifRecorderMainWindow(QMainWindow):
         """Initialize the user interface."""
         self._create_central_widget()
         self._create_controls()
-        self._create_preview_section()
-        self._create_quality_settings()
+        self._create_edit_tabs() # NEW: Create tab widget for editing mode
         self._add_size_grip()
     
     def _create_central_widget(self) -> None:
@@ -92,13 +91,14 @@ class GifRecorderMainWindow(QMainWindow):
         
         self.hotkey_info_label = QLabel("")
         self.hotkey_info_label.setStyleSheet("font-size: 10px; color: gray;")
+        self.hotkey_info_label.setWordWrap(True) # Enable word wrapping
         controls_layout.addWidget(self.hotkey_info_label)
         
         self.main_layout.addWidget(self.controls_frame)
     
-    def _create_toolbar(self) -> QHBoxLayout:
+    def _create_toolbar(self) -> QVBoxLayout:
         """Create the main toolbar with buttons and FPS control."""
-        toolbar_layout = QHBoxLayout()
+        toolbar_layout = QVBoxLayout()
         
         # Action buttons
         self.record_btn = QPushButton("Record")
@@ -108,16 +108,23 @@ class GifRecorderMainWindow(QMainWindow):
         self.quit_btn = QPushButton("Quit")
         
         # FPS control
+        fps_layout = QHBoxLayout()
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(1, 60)
         self.fps_spin.setValue(15)
+        fps_layout.addWidget(QLabel("Recording FPS:"))
+        fps_layout.addWidget(self.fps_spin)
         
         # Add to layout
         toolbar_layout.addWidget(self.record_btn)
         toolbar_layout.addWidget(self.pause_btn)
         toolbar_layout.addWidget(self.record_frame_btn)  # NEW: Add the new button
-        toolbar_layout.addWidget(QLabel("Recording FPS:"))
-        toolbar_layout.addWidget(self.fps_spin)
+        
+        # NEW: Spacer to maintain layout size when record_frame_btn is hidden
+        self.record_frame_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        toolbar_layout.addItem(self.record_frame_spacer)
+        
+        toolbar_layout.addLayout(fps_layout)
         toolbar_layout.addWidget(self.save_btn)
         toolbar_layout.addWidget(self.quit_btn)
         
@@ -125,14 +132,8 @@ class GifRecorderMainWindow(QMainWindow):
     
     def _create_preview_section(self) -> None:
         """Create the preview widget section."""
-        self.preview_widget = PreviewWidget()
-        controls_layout = self.controls_frame.layout()
-        controls_layout.addWidget(self.preview_widget)
-
-    def _create_quality_settings(self) -> None:
-        """Create quality settings group."""
-        self.quality_groupbox = QGroupBox("Quality Settings")
-        quality_layout = QFormLayout()
+        # Remove direct creation of preview_widget and quality_groupbox here
+        # They will be created and added to the tab widget in _create_edit_tabs
         
         # Scale setting
         self.scale_combo = QComboBox()
@@ -209,9 +210,7 @@ class GifRecorderMainWindow(QMainWindow):
         lossy_layout.addWidget(self.lossy_level_label)
         quality_layout.addRow("Lossy Compression (0-10):", lossy_layout)
         
-        self.quality_groupbox.setLayout(quality_layout)
-        controls_layout = self.controls_frame.layout()
-        controls_layout.addWidget(self.quality_groupbox)
+        # Remove direct addition of quality_groupbox here
 
     def _add_size_grip(self) -> None:
         """Add size grip for window resizing."""
@@ -222,7 +221,107 @@ class GifRecorderMainWindow(QMainWindow):
         
         controls_layout = self.controls_frame.layout()
         controls_layout.addLayout(sizegrip_layout)
-    
+
+    def _create_edit_tabs(self) -> None:
+        """Create the tab widget for editing mode."""
+        self.edit_tabs = QTabWidget()
+        
+        # Tab 1: Quality Settings
+        quality_tab = QWidget()
+        quality_tab_layout = QVBoxLayout(quality_tab) # Layout for the quality_tab
+        
+        self.quality_groupbox = QGroupBox("Quality Settings")
+        quality_groupbox_layout = QFormLayout() # Layout for the quality_groupbox
+        
+        # Scale setting
+        self.scale_combo = QComboBox()
+        self.scale_combo.addItems(["100%", "75%", "50%", "25%"])
+        quality_groupbox_layout.addRow("Scale:", self.scale_combo)
+        
+        # Colors setting
+        self.colors_combo = QComboBox()
+        self.colors_combo.addItems(["256 (Default)", "128", "64", "32"])
+        quality_groupbox_layout.addRow("Colors:", self.colors_combo)
+        
+        # Frame skipping
+        self.skip_frame_spin = QSpinBox()
+        self.skip_frame_spin.setRange(1, 20)
+        self.skip_frame_spin.setValue(1)
+        self.skip_frame_spin.setToolTip("Reduces frame rate (1=all, 2=every second, etc.)")
+        quality_groupbox_layout.addRow("Use every n-th frame:", self.skip_frame_spin)
+        
+        # NEU: Ähnlichkeits-Erkennung aktivieren/deaktivieren
+        self.similarity_check = QCheckBox("Skip similar frames")
+        self.similarity_check.setChecked(True)
+        self.similarity_check.setToolTip("Automatically skip frames that are very similar to the previous frame")
+        quality_groupbox_layout.addRow(self.similarity_check)
+        
+        # NEU: Ähnlichkeits-Schwellenwert
+        similarity_layout = QHBoxLayout()
+        self.similarity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.similarity_slider.setRange(85, 99)  # 0.85 bis 0.99
+        self.similarity_slider.setValue(95)  # 0.95 default
+        self.similarity_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.similarity_slider.setTickInterval(5)
+        self.similarity_slider.setToolTip("Higher values = more frames skipped (more aggressive)")
+        
+        self.similarity_label = QLabel("95%")
+        self.similarity_slider.valueChanged.connect(
+            lambda v: self.similarity_label.setText(f"{v}%")
+        )
+        
+        # Ähnlichkeits-Einstellungen nur aktiv wenn Checkbox aktiviert
+        self.similarity_check.toggled.connect(self.similarity_slider.setEnabled)
+        self.similarity_check.toggled.connect(self.similarity_label.setEnabled)
+        
+        similarity_layout.addWidget(self.similarity_slider)
+        similarity_layout.addWidget(self.similarity_label)
+        quality_groupbox_layout.addRow("Skip similarity of:", similarity_layout)
+        
+        # Dithering
+        self.dithering_check = QCheckBox("Use Dithering")
+        self.dithering_check.setChecked(True)
+        quality_groupbox_layout.addRow(self.dithering_check)
+        
+        # Disposal method
+        self.disposal_combo = QComboBox()
+        self.disposal_combo.addItems([
+            "No Disposal (0)", "Do Not Dispose (1)",
+            "Restore to Background (2)", "Restore to Previous (3)"
+        ])
+        quality_groupbox_layout.addRow("Disposal Method:", self.disposal_combo)
+        
+        # Lossy compression
+        lossy_layout = QHBoxLayout()
+        self.lossy_level_slider = QSlider(Qt.Orientation.Horizontal)
+        self.lossy_level_slider.setRange(0, 10)
+        self.lossy_level_slider.setValue(0)
+        self.lossy_level_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.lossy_level_slider.setTickInterval(1)
+        
+        self.lossy_level_label = QLabel("0")
+        self.lossy_level_slider.valueChanged.connect(
+            lambda v: self.lossy_level_label.setText(str(v))
+        )
+        
+        lossy_layout.addWidget(self.lossy_level_slider)
+        lossy_layout.addWidget(self.lossy_level_label)
+        quality_groupbox_layout.addRow("Lossy Compression (0-10):", lossy_layout)
+        
+        self.quality_groupbox.setLayout(quality_groupbox_layout)
+        quality_tab_layout.addWidget(self.quality_groupbox) # Add the groupbox to the tab's layout
+        self.edit_tabs.addTab(quality_tab, "Quality Settings")
+
+        # Tab 2: Preview and Trimming
+        preview_tab = QWidget()
+        preview_layout = QVBoxLayout(preview_tab)
+        self.preview_widget = PreviewWidget() # Re-create here
+        preview_layout.addWidget(self.preview_widget)
+        self.edit_tabs.addTab(preview_tab, "Preview && Trimming")
+
+        controls_layout = self.controls_frame.layout()
+        controls_layout.addWidget(self.edit_tabs)
+
     def _connect_signals(self) -> None:
         """Connect all signals to their handlers."""
         # Button connections
@@ -258,6 +357,9 @@ class GifRecorderMainWindow(QMainWindow):
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
+        
+        # Apply a stylesheet for disabled buttons to ensure they are greyed out
+        self.setStyleSheet("QPushButton:disabled { color: #808080; }")
         
         self.show()
     
@@ -470,15 +572,10 @@ class GifRecorderMainWindow(QMainWindow):
         frame_count = len(self.frames)
         
         if mode == AppMode.RECORDING:
-            if self.recording_manager.is_frame_by_frame_mode:
-                self.status_label.setText(f"Frame-by-frame mode: Recording... ({frame_count} frames)")
-            else:
-                self.status_label.setText(f"Recording... ({frame_count} frames)")
+            self.status_label.setText(f"Recording... ({frame_count} frames)")
         elif mode == AppMode.PAUSED:
-            if self.recording_manager.is_frame_by_frame_mode:
-                self.status_label.setText(f"Frame-by-frame mode: Ready for next frame. ({frame_count} frames)")
-            else:
-                self.status_label.setText(f"Paused. ({frame_count} frames)")
+            
+            self.status_label.setText(f"Paused. ({frame_count} frames)")
         elif mode == AppMode.EDITING:
             self.status_label.setText(f"Done. {frame_count} frames. Ready to edit or save.")
         else:  # READY
