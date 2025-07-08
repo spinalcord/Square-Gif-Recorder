@@ -89,7 +89,7 @@ class GifRecorderMainWindow(QMainWindow):
         
         self.record_btn = QPushButton("Record")
         self.pause_btn = QPushButton("Pause")
-        self.record_frame_btn = QPushButton("Resume & Pause")
+        self.record_frame_btn = QPushButton("Resume && Pause")
         self.save_btn = QPushButton("Save")
         self.quit_btn = QPushButton("Quit")
         
@@ -196,9 +196,23 @@ class GifRecorderMainWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_tab)
         self.preview_widget = PreviewWidget()
         preview_layout.addWidget(self.preview_widget)
-        self.edit_tabs.addTab(preview_tab, "Preview & Trimming")
+        self.edit_tabs.addTab(preview_tab, "Preview && Trimming")
 
         self.controls_frame.layout().addWidget(self.edit_tabs)
+        self.preview_widget.frame_deleted.connect(self._on_frame_deleted)
+        self.preview_widget.frames_updated.connect(self._on_frames_updated)
+
+    def _on_frame_deleted(self, deleted_index: int):
+        """Handle frame deletion from preview widget."""
+        # Frame was already deleted from preview_widget.frames
+        # Just update our own frames list
+        self.frames = self.preview_widget.frames.copy()
+        self.update_status_label()
+
+    def _on_frames_updated(self, updated_frames: List[QImage]):
+        """Handle frames update from preview widget."""
+        self.frames = updated_frames.copy()
+        self.update_status_label()
 
     def _add_size_grip(self) -> None:
         sizegrip_layout = QHBoxLayout()
