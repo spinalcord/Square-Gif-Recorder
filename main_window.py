@@ -19,6 +19,7 @@ class GifRecorderMainWindow(QMainWindow):
     stop_signal = pyqtSignal()
     record_frame_signal = pyqtSignal()
 
+
     def __init__(self):
         super().__init__()
         
@@ -43,6 +44,7 @@ class GifRecorderMainWindow(QMainWindow):
         self._init_ui()
         self._connect_signals()
         self._setup_window()
+
         self._setup_hotkeys()
         
         self.ui_manager.update_for_mode(AppMode.READY)
@@ -74,42 +76,69 @@ class GifRecorderMainWindow(QMainWindow):
         toolbar = self._create_toolbar()
         controls_layout.addLayout(toolbar)
         
-        self.status_label = QLabel("Ready.")
-        controls_layout.addWidget(self.status_label)
-        
-        self.hotkey_info_label = QLabel("")
-        self.hotkey_info_label.setStyleSheet("font-size: 10px; color: gray;")
-        self.hotkey_info_label.setWordWrap(True)
-        controls_layout.addWidget(self.hotkey_info_label)
+        #self.status_label = QLabel("Ready.")
+        #controls_layout.addWidget(self.status_label)
         
         self.main_layout.addWidget(self.controls_frame)
     
+ 
     def _create_toolbar(self) -> QVBoxLayout:
         toolbar_layout = QVBoxLayout()
         
-        self.record_btn = QPushButton("Record")
-        self.pause_btn = QPushButton("Pause")
-        self.record_frame_btn = QPushButton("Resume && Pause")
-        self.save_btn = QPushButton("Save")
-        self.quit_btn = QPushButton("Quit")
+        # Main recording buttons in one row
+        recording_layout = QHBoxLayout()
+        self.record_btn = QPushButton("🔴")
+        self.record_frame_btn = QPushButton("🔵")
+        self.pause_btn = QPushButton("▮▮")
+        self.stop_btn = QPushButton("◼")
+        self.shortcuts_btn = QPushButton("?")
+        self.quit_btn = QPushButton("X")
         
+        # Set maximum and minimum sizes for compact buttons
+        buttons = [self.record_btn, self.record_frame_btn, self.pause_btn, 
+                self.stop_btn, self.shortcuts_btn]
+        
+        for button in buttons:
+            button.setMaximumSize(30, 25)  # Width, Height
+            button.setMinimumSize(25, 20)
+            button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        
+        self.quit_btn.setMaximumSize(30, 25)
+        self.quit_btn.setMinimumSize(30, 25)
+        
+        recording_layout.addWidget(self.record_btn)
+        recording_layout.addWidget(self.record_frame_btn)
+        recording_layout.addWidget(self.pause_btn)
+        recording_layout.addWidget(self.stop_btn)
+        recording_layout.addWidget(self.shortcuts_btn)
+        recording_layout.addWidget(self.quit_btn)
+        toolbar_layout.addLayout(recording_layout)
+        
+        # FPS settings with status label
         fps_layout = QHBoxLayout()
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(1, 60)
         self.fps_spin.setValue(15)
-        fps_layout.addWidget(QLabel("Recording FPS:"))
+        self.fps_spin.setMaximumSize(50, 25)  # Also limit spinbox size
+        
+        self.fps_label = QLabel("FPS:")
+        fps_layout.addWidget(self.fps_label)
         fps_layout.addWidget(self.fps_spin)
         
-        toolbar_layout.addWidget(self.record_btn)
-        toolbar_layout.addWidget(self.pause_btn)
-        toolbar_layout.addWidget(self.record_frame_btn)
-        
-        self.record_frame_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        toolbar_layout.addItem(self.record_frame_spacer)
+        self.status_label = QLabel("Ready.")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        fps_layout.addWidget(self.status_label)
         
         toolbar_layout.addLayout(fps_layout)
-        toolbar_layout.addWidget(self.save_btn)
-        toolbar_layout.addWidget(self.quit_btn)
+        
+        # Session management buttons
+        session_layout = QHBoxLayout()
+        self.save_btn = QPushButton("Save")
+        self.new_btn = QPushButton("New")
+        
+        session_layout.addWidget(self.save_btn)
+        session_layout.addWidget(self.new_btn)
+        toolbar_layout.addLayout(session_layout)
         
         return toolbar_layout
     
@@ -221,13 +250,25 @@ class GifRecorderMainWindow(QMainWindow):
         sizegrip_layout.addWidget(self.sizegrip)
         self.controls_frame.layout().addLayout(sizegrip_layout)
 
+    def _show_shortcuts_dialog(self) -> None:
+        """Show shortcuts information dialog."""
+        shortcuts_text = self.hotkey_manager.status_text
+        QMessageBox.information(self, "Keyboard Shortcuts", shortcuts_text)
+
     def _connect_signals(self) -> None:
+        # Recording controls
         self.record_btn.clicked.connect(self._on_record_clicked)
-        self.pause_btn.clicked.connect(self._on_pause_clicked)
         self.record_frame_btn.clicked.connect(self._on_record_frame_clicked)
+        self.pause_btn.clicked.connect(self._on_pause_clicked)
+        self.stop_btn.clicked.connect(self._on_stop_clicked)
+        self.shortcuts_btn.clicked.connect(self._show_shortcuts_dialog) 
+
+        # Session management
         self.save_btn.clicked.connect(self._on_save_clicked)
+        self.new_btn.clicked.connect(self._on_new_clicked)
         self.quit_btn.clicked.connect(self.confirm_quit)
         
+        # Hotkey signals
         self.record_signal.connect(self._on_record_clicked)
         self.pause_signal.connect(self._on_pause_clicked)
         self.stop_signal.connect(self._on_stop_clicked)
@@ -246,8 +287,8 @@ class GifRecorderMainWindow(QMainWindow):
         
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
+            Qt.WindowType.WindowStaysOnTopHint | 
+            Qt.WindowType.Window
         )
         
         # Performance optimizations
@@ -260,7 +301,6 @@ class GifRecorderMainWindow(QMainWindow):
     
     def _setup_hotkeys(self) -> None:
         success = self.hotkey_manager.setup()
-        self.hotkey_info_label.setText(self.hotkey_manager.status_text)
     
     def _initial_fix(self) -> None:
         if not self.frames:
@@ -276,53 +316,61 @@ class GifRecorderMainWindow(QMainWindow):
         if self._saved_window_pos is not None:
             self.move(self._saved_window_pos)
 
+    def _on_new_clicked(self) -> None:
+        """Startet neue Session (löscht aktuelle Frames)"""
+        if self._is_closing:
+            return
+        
+        self.clear_frames(confirm=True)
+
     def _on_record_clicked(self) -> None:
-        if self._is_closing:
-            return
-        
-        mode = self.recording_manager.mode
-        
-        if mode == AppMode.EDITING:
-            self.clear_frames(confirm=True)
-        elif mode == AppMode.READY:
-            self._start_recording()
-        elif mode in [AppMode.RECORDING, AppMode.PAUSED]:
-            self._stop_recording()
-    
-    def _on_pause_clicked(self) -> None:
-        if self._is_closing:
-            return
-        
-        if self.recording_manager.is_frame_by_frame_mode:
-            if self.recording_manager.mode == AppMode.PAUSED:
-                self.recording_manager.resume()
-            else:
-                self.recording_manager.pause()
-        else:
-            self.recording_manager.toggle_pause()
-        
-        self.ui_manager.update_for_mode(self.recording_manager.mode)
-    
-    def _on_record_frame_clicked(self) -> None:
+        """Startet nur kontinuierliche Aufnahme"""
         if self._is_closing:
             return
         
         if self.recording_manager.mode == AppMode.READY:
-            self._save_window_size()
+            self._start_recording()
+    
+    def _on_pause_clicked(self) -> None:
+        """Pausiert oder setzt Aufnahme fort"""
+        if self._is_closing:
+            return
         
-        record_rect = self.get_recording_rect()
-        
-        if self.recording_manager.start_frame_by_frame(record_rect, self.fps_spin.value()):
+        if self.recording_manager.mode in [AppMode.RECORDING, AppMode.PAUSED]:
+            if self.recording_manager.is_frame_by_frame_mode:
+                if self.recording_manager.mode == AppMode.PAUSED:
+                    self.recording_manager.resume()
+                else:
+                    self.recording_manager.pause()
+            else:
+                self.recording_manager.toggle_pause()
+            
             self.ui_manager.update_for_mode(self.recording_manager.mode)
     
+    def _on_record_frame_clicked(self) -> None:
+        """Startet Frame-by-Frame Modus oder fügt einzelnen Frame hinzu"""
+        if self._is_closing:
+            return
+        
+        if self.recording_manager.mode == AppMode.READY:
+            # Frame-by-Frame Modus starten
+            self._save_window_size()
+            record_rect = self.get_recording_rect()
+            
+            if self.recording_manager.start_frame_by_frame(record_rect, self.fps_spin.value()):
+                self.ui_manager.update_for_mode(self.recording_manager.mode)
+                
+        elif self.recording_manager.mode == AppMode.PAUSED:
+            # Einzelnen Frame hinzufügen (im pausierten Zustand)
+            self.recording_manager.record_single_frame()
+    
     def _on_stop_clicked(self) -> None:
+        """Stoppt Aufnahme komplett und wechselt in Edit-Modus"""
         if self._is_closing:
             return
         
         if self.recording_manager.mode in [AppMode.RECORDING, AppMode.PAUSED]:
             self._stop_recording()
-        elif self.frames:
-            self.clear_frames(confirm=True)
     
     def _on_save_clicked(self) -> None:
         quality_settings = self._get_quality_settings()
@@ -335,6 +383,7 @@ class GifRecorderMainWindow(QMainWindow):
         self._save_gif(frames_to_save, quality_settings)
     
     def _start_recording(self) -> None:
+        """Startet kontinuierliche Aufnahme"""
         self._save_window_size()
         record_rect = self.get_recording_rect()
         
@@ -342,6 +391,7 @@ class GifRecorderMainWindow(QMainWindow):
             self.ui_manager.update_for_mode(self.recording_manager.mode)
     
     def _stop_recording(self) -> None:
+        """Stoppt Aufnahme und wechselt in Edit-Modus"""
         self.recording_manager.stop()
         
         if self.frames:
@@ -357,16 +407,6 @@ class GifRecorderMainWindow(QMainWindow):
         if not self.frames and confirm:
             self.ui_manager.update_for_mode(AppMode.READY)
             return
-        
-        if confirm and self.frames:
-            reply = QMessageBox.question(
-                self, "New Recording",
-                "Discard current frames and start a new recording session?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
         
         self.frames.clear()
         self.preview_widget.set_frames([], self.fps_spin.value())
@@ -443,7 +483,7 @@ class GifRecorderMainWindow(QMainWindow):
             if rect.width() > 0 and rect.height() > 0:
                 self.status_label.setText(f"Ready. Area: {rect.width()} × {rect.height()}")
             else:
-                self.status_label.setText("Please enlarge the window.")
+                self.status_label.setText("")
     
     def get_recording_rect(self) -> QRect:
         global_pos = self.mapToGlobal(QPoint(0, 0))

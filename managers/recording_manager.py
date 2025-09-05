@@ -60,14 +60,14 @@ class RecordingManager:
             self._mode = AppMode.PAUSED
             
             # Capture the first frame immediately
-            QTimer.singleShot(50, self._capture_single_frame)
+            QTimer.singleShot(50, self.record_single_frame)
         elif self._mode == AppMode.PAUSED:
             # Capture one frame by temporarily resuming and pausing again
-            self._capture_single_frame()
+            self.record_single_frame()
         
         return True
     
-    def _capture_single_frame(self) -> None:  # NEW
+    def record_single_frame(self) -> None:  # NEW
         """Capture a single frame by briefly resuming and pausing."""
         if self.timer and self._mode == AppMode.PAUSED:
             # Temporarily resume to capture one frame
