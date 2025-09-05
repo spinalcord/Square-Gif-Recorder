@@ -286,7 +286,7 @@ class GifRecorderMainWindow(QMainWindow):
         self.setGeometry(x, y, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)
         
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.FramelessWindowHint |y
             Qt.WindowType.WindowStaysOnTopHint | 
             Qt.WindowType.Window
         )
