@@ -82,19 +82,19 @@ class PreviewWidget(QWidget):
         # Navigation buttons
         nav_buttons_layout = QHBoxLayout()
         
-        self.first_frame_btn = QPushButton("⏮")
+        self.first_frame_btn = QPushButton("◀◀")
         self.first_frame_btn.setMaximumWidth(40)
         self.first_frame_btn.setToolTip("First frame")
         
-        self.prev_frame_btn = QPushButton("⏪")
+        self.prev_frame_btn = QPushButton("◀")
         self.prev_frame_btn.setMaximumWidth(40)
         self.prev_frame_btn.setToolTip("Previous frame")
         
-        self.next_frame_btn = QPushButton("⏩")
+        self.next_frame_btn = QPushButton("▶")
         self.next_frame_btn.setMaximumWidth(40)
         self.next_frame_btn.setToolTip("Next frame")
         
-        self.last_frame_btn = QPushButton("⏭")
+        self.last_frame_btn = QPushButton("▶▶")
         self.last_frame_btn.setMaximumWidth(40)
         self.last_frame_btn.setToolTip("Last frame")
         
@@ -348,7 +348,7 @@ class PreviewWidget(QWidget):
         
         self.animation_timer.setInterval(1000 // self.current_fps)
         self.animation_timer.start()
-        self.play_btn.setText("⏸ Pause")
+        self.play_btn.setText("▮▮")
     
     def _stop_animation(self):
         """Stop animation playback."""

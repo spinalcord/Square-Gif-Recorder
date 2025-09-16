@@ -10,7 +10,7 @@ class RecordingTimer(QThread):
     """
     frame_captured = pyqtSignal(QImage)
 
-    def __init__(self, rect: QRect, fps: int = 10):
+    def __init__(self, rect: QRect, fps: int = 10, mouse_skip: int = 0):
         super().__init__()
         self.rect = rect
         self.fps = fps
@@ -97,7 +97,7 @@ class RecordingTimer(QThread):
                 continue
 
             cursor_pos = QCursor.pos()
-            self.draw_cursor_in_recording(pixmap, cursor_pos)
+            #self.draw_cursor_in_recording(pixmap, cursor_pos)
 
             self.frame_captured.emit(pixmap.toImage())
 
