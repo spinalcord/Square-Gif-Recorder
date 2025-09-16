@@ -36,7 +36,7 @@ class GifRecorderMainWindow(QMainWindow):
         self._resize_timer.timeout.connect(self._delayed_resize_update)
         self._last_mask_size = QSize()
         self._cached_mask = QRegion()
-        
+
         self.ui_manager = UIManager(self)
         self.recording_manager = RecordingManager(self)
         self.hotkey_manager = HotkeyManager(self, HotkeyConfig())
@@ -54,8 +54,9 @@ class GifRecorderMainWindow(QMainWindow):
         self._create_central_widget()
         self._create_controls()
         self._create_edit_tabs()
-        self._add_size_grip()
-    
+        #self._add_size_grip()
+
+
     def _create_central_widget(self) -> None:
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -140,6 +141,9 @@ class GifRecorderMainWindow(QMainWindow):
         self.status_label = QLabel("Ready.")
         self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         fps_layout.addWidget(self.status_label)
+
+        self.sizegrip = QSizeGrip(self.controls_frame)
+        fps_layout.addWidget(self.sizegrip)
 
         toolbar_layout.addLayout(fps_layout)
 
@@ -570,9 +574,9 @@ class GifRecorderMainWindow(QMainWindow):
 
     ### marker1
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        #if self.recording_manager.mode in [AppMode.RECORDING, AppMode.PAUSED]:
-        #    event.ignore()
-        #    return
+        if self.recording_manager.mode in [AppMode.RECORDING]:
+            event.ignore()
+            return
 
         if event.button() == Qt.MouseButton.LeftButton:
             if QT_VERSION == 6:
@@ -595,9 +599,9 @@ class GifRecorderMainWindow(QMainWindow):
 
     ### marker1
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        #if self.recording_manager.mode in [AppMode.RECORDING, AppMode.PAUSED]:
-        #    event.ignore()
-        #    return
+        if self.recording_manager.mode in [AppMode.RECORDING]:
+            event.ignore()
+            return
 
         if event.buttons() == Qt.MouseButton.LeftButton and not self.drag_pos.isNull():
             if QT_VERSION == 6:

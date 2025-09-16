@@ -47,6 +47,8 @@ class UIManager:
             mw.stop_btn.setEnabled(False)
             mw.save_btn.setEnabled(False)
             mw.new_btn.setEnabled(bool(mw.frames))  # Only if frames are present
+            mw.sizegrip.setEnabled(True)
+            mw.sizegrip.setVisible(True)
 
         elif mode == AppMode.RECORDING:
             # Recording is in progress
@@ -55,16 +57,19 @@ class UIManager:
             mw.stop_btn.setEnabled(True)
             mw.save_btn.setEnabled(False)
             mw.new_btn.setEnabled(False)
+            mw.sizegrip.setEnabled(False)
+            mw.sizegrip.setVisible(True)
 
         elif mode == AppMode.PAUSED:
             # Recording is paused
             mw.record_btn.setEnabled(False)
             mw.record_frame_btn.setEnabled(True)  # Add single frames
             mw.pause_btn.setEnabled(True)  # Resume is possible
-
             mw.stop_btn.setEnabled(True)
             mw.save_btn.setEnabled(False)
             mw.new_btn.setEnabled(False)
+            mw.sizegrip.setEnabled(False)
+            mw.sizegrip.setVisible(True)
 
         elif mode == AppMode.EDITING:
             # Frames are available, ready for editing/saving
@@ -74,6 +79,8 @@ class UIManager:
             mw.stop_btn.setEnabled(False)
             mw.save_btn.setEnabled(True)  # Saving is possible
             mw.new_btn.setEnabled(True)  # Resetting the session is possible
+            mw.sizegrip.setEnabled(True)
+            mw.sizegrip.setVisible(False)
 
     def _update_tooltips(self, mode: AppMode) -> None:
         """Update button tooltips based on current mode."""
