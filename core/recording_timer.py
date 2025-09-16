@@ -1,5 +1,7 @@
 import time
-from utils.qt_imports import QThread, pyqtSignal, QRect, QImage, QApplication, QCursor, QPainter, QPoint, QPixmap, Qt, QPen
+from utils.qt_imports import QThread, pyqtSignal, QRect, QImage, QApplication, QCursor, QPainter, QPoint, QPixmap, Qt, \
+    QPen
+
 
 class RecordingTimer(QThread):
     """
@@ -14,54 +16,60 @@ class RecordingTimer(QThread):
         self.fps = fps
         self.is_running = False
         self.is_paused = False
-        # Ermittle den korrekten Bildschirm basierend auf dem Aufnahmerechteck
+        # Determine the correct screen based on the recording rectangle
         self.target_screen = self._get_screen_for_rect(rect)
+
+    def update_recording_rect(self, new_rect: QRect) -> None:
+        """Update the recording rectangle and screen while recording."""
+        # Update the recording rectangle
+        self.rect = new_rect
+
+        # Re-determine the target screen (in case window moved to another monitor)
+        new_screen = self._get_screen_for_rect(new_rect)
+
+        # Only log if screen changed
+        if new_screen != self.target_screen:
+            print(f"Switched recording to screen: {new_screen.name()} at {new_screen.geometry()}")
+            self.target_screen = new_screen
 
     def _get_screen_for_rect(self, rect: QRect):
         """
-        Ermittelt den Bildschirm, der das Aufnahmerechteck enthält.
-        Falls das Rechteck über mehrere Bildschirme geht, wird der Bildschirm
-        mit der größten Überschneidung gewählt.
+        Determines the screen that contains the recording rectangle.
+        If the rectangle spans multiple screens, the screen with the
+        largest intersection is chosen.
         """
         screens = QApplication.screens()
         best_screen = QApplication.primaryScreen()  # Fallback
         max_intersection_area = 0
-        
+
         for screen in screens:
             screen_geometry = screen.geometry()
             intersection = rect.intersected(screen_geometry)
-            
+
             if not intersection.isEmpty():
                 intersection_area = intersection.width() * intersection.height()
                 if intersection_area > max_intersection_area:
                     max_intersection_area = intersection_area
                     best_screen = screen
-        
+
         print(f"Recording on screen: {best_screen.name()} at {best_screen.geometry()}")
         return best_screen
 
     def _convert_to_screen_coordinates(self, global_rect: QRect):
         """
-        Konvertiert globale Koordinaten zu bildschirmspezifischen Koordinaten.
+        Converts global coordinates to screen-specific coordinates.
         """
         screen_geometry = self.target_screen.geometry()
-        
-        # Berechne relative Koordinaten zum gewählten Bildschirm
+
+        # Calculate relative coordinates to the chosen screen
         relative_x = global_rect.x() - screen_geometry.x()
         relative_y = global_rect.y() - screen_geometry.y()
-        
+
         return QRect(relative_x, relative_y, global_rect.width(), global_rect.height())
 
     def run(self):
         self.is_running = True
         interval = 1.0 / self.fps if self.fps > 0 else 0.1
-        
-        # Konvertiere zu bildschirmspezifischen Koordinaten
-        screen_rect = self._convert_to_screen_coordinates(self.rect)
-        
-        print(f"Global rect: {self.rect}")
-        print(f"Screen rect: {screen_rect}")
-        print(f"Screen geometry: {self.target_screen.geometry()}")
 
         while self.is_running:
             if self.is_paused:
@@ -69,17 +77,20 @@ class RecordingTimer(QThread):
                 continue
 
             start_time = time.time()
-            
-            # Verwende den korrekten Bildschirm für die Aufnahme
+
+            # Convert to screen-specific coordinates (recalculate EVERY TIME!)
+            screen_rect = self._convert_to_screen_coordinates(self.rect)
+
+            # Use the correct screen for the capture
             pixmap = self.target_screen.grabWindow(
-                0,  # Desktop window ID (0 für den gesamten Bildschirm)
-                screen_rect.x(), 
-                screen_rect.y(), 
-                screen_rect.width(), 
+                0,  # Desktop window ID (0 for the entire desktop)
+                screen_rect.x(),
+                screen_rect.y(),
+                screen_rect.width(),
                 screen_rect.height()
             )
-            
-            # Überprüfe ob die Aufnahme erfolgreich war
+
+            # Check if the capture was successful
             if pixmap.isNull():
                 print(f"Warning: Failed to capture screen area {screen_rect}")
                 self.msleep(100)
@@ -105,23 +116,24 @@ class RecordingTimer(QThread):
     def resume(self):
         """Resumes frame capturing."""
         self.is_paused = False
+
     def draw_cursor(self, painter, cursor_pos):
-        """Zeichnet einen einfachen Mauszeiger (Pfeil) an der angegebenen Position."""
-        # Pfeil-Punkte definieren
+        """Draws a simple mouse cursor (arrow) at the specified position."""
+        # Define arrow points
         arrow_points = [
             QPoint(0, 0), QPoint(0, 16), QPoint(6, 12), QPoint(10, 18),
             QPoint(12, 16), QPoint(8, 10), QPoint(16, 8), QPoint(0, 0)
         ]
-        
-        # Punkte zur Cursor-Position verschieben
+
+        # Translate points to the cursor position
         translated_points = [cursor_pos + point for point in arrow_points]
-        
-        # Weißer Rand
+
+        # White border
         painter.setPen(QPen(Qt.GlobalColor.white, 2))
         painter.setBrush(Qt.GlobalColor.white)
         painter.drawPolygon(translated_points)
-        
-        # Schwarzer Pfeil
+
+        # Black arrow
         painter.setPen(QPen(Qt.GlobalColor.black, 1))
         painter.setBrush(Qt.GlobalColor.black)
         inner_points = [
@@ -132,13 +144,13 @@ class RecordingTimer(QThread):
         painter.drawPolygon(inner_translated)
 
     def draw_cursor_in_recording(self, pixmap, cursor_pos):
-        """Zeichnet den Cursor ins aufgenommene Bild."""
+        """Draws the cursor into the recorded image."""
         # Check if the cursor is within the recording rectangle
         if self.rect.contains(cursor_pos):
             painter = QPainter(pixmap)
             # Calculate cursor position relative to the grabbed pixmap
             relative_cursor_pos = cursor_pos - self.rect.topLeft()
-            
-            # Zeichne den Cursor
+
+            # Draw the cursor
             self.draw_cursor(painter, relative_cursor_pos)
             painter.end()
