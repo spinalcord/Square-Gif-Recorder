@@ -3,9 +3,10 @@
 A linux desktop application for recording GIFs, with a lot of quality settings.
 Please leave a ⭐ and pleas give feedback, i tested this on archlinux currently and I will support more linux distributions (In case it is not working on your distribution).
 
-### UI Screenshot
 ![UI Screenshot](demo/ui_v1.5.gif) 
-![UI Screenshot](demo/ui2.jpg)
+### UI Screenshot
+![UI Screenshot](demo/1.6_2.jpg) ![UI Screenshot](demo/1.6_1.jpg) 
+
 
 ### Movement GIF
 ![Movement GIF](demo/movement.gif)

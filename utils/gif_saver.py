@@ -596,71 +596,72 @@ class GifSaver:
             
             # Show success message
             self._show_success(parent_widget, filename)
-            return Path(filename).name
-    
+            return filename
+
+    # marker2
     def _process_frames(
-        self, 
-        frames: List[QImage], 
-        settings: GifSettings, 
+        self,
+        frames: List[QImage],
+        settings: GifSettings,
         progress_manager: ProgressManager
     ) -> Optional[List[Image.Image]]:
         """Process all frames and return PIL images mit Ähnlichkeitsprüfung."""
         processed_images = []
-        
+
         # Ähnlichkeitsdetektor initialisieren
         similarity_detector = None
         if settings.enable_similarity_skip:
             similarity_detector = FrameSimilarityDetector(settings.similarity_threshold)
-        
+
         skipped_count = 0
-        
+
         for i, qimage in enumerate(frames):
             # Check for cancellation
             status_text = f"Processing frame {i + 1}/{len(frames)}"
             if skipped_count > 0:
                 status_text += f" (skipped {skipped_count} similar)"
-            
+
             if progress_manager.update_frame_progress(i, status_text):
                 return None  # Cancelled
-            
+
             try:
                 # Convert and process image
                 pil_image = self.converter.qimage_to_pil(qimage)
                 processed_image = self.converter.process_image(pil_image, settings)
-                
+
                 # Ähnlichkeitsprüfung
                 if similarity_detector and similarity_detector.is_similar_to_previous(processed_image):
                     skipped_count += 1
                     continue  # Frame überspringen
-                
+
                 processed_images.append(processed_image)
-                
+
             except Exception as e:
                 raise RuntimeError(f"Failed to process frame {i + 1}: {e}") from e
-        
+
         # Final frame processing update
         final_status = f"Processed {len(processed_images)} frames"
         if skipped_count > 0:
             final_status += f" (skipped {skipped_count} similar frames)"
         progress_manager.update_frame_progress(len(frames), final_status)
-        
+
         return processed_images
-    
+
     def _save_gif_file(
-        self, 
-        images: List[Image.Image], 
-        settings: GifSettings, 
+        self,
+        images: List[Image.Image],
+        settings: GifSettings,
         filename: str,
         progress_manager: ProgressManager
     ) -> None:
         """Save processed images as GIF file."""
         if not images:
             raise ValueError("No images to save")
-        
+
         # Check for cancellation before starting save
         if progress_manager.is_cancelled():
             return
-        
+
         try:
             # Save with PIL - this operation doesn't provide progress callbacks
             # so we just show a general "saving" message
@@ -713,9 +714,9 @@ def save_gif_from_frames(
 ) -> Optional[str]:
     """
     Legacy function wrapper für Rückwärtskompatibilität mit neuen Ähnlichkeitsparametern.
-    
+
     Saves frames as a GIF file with the specified settings.
-    
+
     Args:
         parent_widget: Qt widget for dialogs
         frames: List of QImage objects to save
@@ -729,7 +730,7 @@ def save_gif_from_frames(
         similarity_threshold: Threshold for frame similarity (0.0-1.0)
         enable_similarity_skip: Whether to skip similar frames
         progress_callback: Optional callback for progress updates
-    
+
     Returns:
         Filename if successful, None if cancelled or failed.
     """
@@ -745,11 +746,11 @@ def save_gif_from_frames(
             similarity_threshold=similarity_threshold,  # NEU
             enable_similarity_skip=enable_similarity_skip  # NEU
         )
-        
+
         return _gif_saver.save_gif_from_frames(
             parent_widget, frames, settings, progress_callback
         )
-        
+
     except ValueError as e:
         if parent_widget:
             QMessageBox.critical(parent_widget, "Invalid Settings", str(e))

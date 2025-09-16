@@ -49,6 +49,8 @@ class UIManager:
             mw.new_btn.setEnabled(bool(mw.frames))  # Only if frames are present
             mw.sizegrip.setEnabled(True)
             mw.sizegrip.setVisible(True)
+            mw.mouse_skips_spin.setVisible(True)
+            mw.mouse_skips_label.setVisible(True)
 
         elif mode == AppMode.RECORDING:
             # Recording is in progress
@@ -59,6 +61,9 @@ class UIManager:
             mw.new_btn.setEnabled(False)
             mw.sizegrip.setEnabled(False)
             mw.sizegrip.setVisible(True)
+            mw.mouse_skips_spin.setVisible(False)
+            mw.mouse_skips_label.setVisible(False)
+
 
         elif mode == AppMode.PAUSED:
             # Recording is paused
@@ -70,6 +75,8 @@ class UIManager:
             mw.new_btn.setEnabled(False)
             mw.sizegrip.setEnabled(False)
             mw.sizegrip.setVisible(True)
+            mw.mouse_skips_spin.setVisible(False)
+            mw.mouse_skips_label.setVisible(False)
 
         elif mode == AppMode.EDITING:
             # Frames are available, ready for editing/saving
@@ -81,6 +88,8 @@ class UIManager:
             mw.new_btn.setEnabled(True)  # Resetting the session is possible
             mw.sizegrip.setEnabled(True)
             mw.sizegrip.setVisible(False)
+            mw.mouse_skips_spin.setVisible(False)
+            mw.mouse_skips_label.setVisible(False)
 
     def _update_tooltips(self, mode: AppMode) -> None:
         """Update button tooltips based on current mode."""

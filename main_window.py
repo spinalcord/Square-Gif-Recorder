@@ -1,3 +1,4 @@
+import os
 from typing import List, Optional
 from utils.qt_imports import *
 from utils.constants import *
@@ -11,6 +12,8 @@ from managers.hotkey_manager import HotkeyManager
 from managers.recording_manager import RecordingManager
 from widgets.range_slider import RangeSlider
 from widgets.preview_widget import PreviewWidget
+from core.cmd_executer import CMDExecuter
+from managers.config_manager import ConfigManager
 
 
 class GifRecorderMainWindow(QMainWindow):
@@ -22,7 +25,8 @@ class GifRecorderMainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        
+        self.config_manager = ConfigManager()
+
         self.frames: List[QImage] = []
         self.drag_pos = QPoint()
         self._last_mode_was_edit = True
@@ -45,8 +49,12 @@ class GifRecorderMainWindow(QMainWindow):
         self._connect_signals()
         self._setup_window()
 
+        # Load saved settings AFTER UI is created
+        self.config_manager.load_all_settings(self)
+
         self._setup_hotkeys()
-        
+
+        self.cmd_executor = CMDExecuter(default_timeout=60)
         self.ui_manager.update_for_mode(AppMode.READY)
         QTimer.singleShot(0, self._initial_fix)
 
@@ -240,7 +248,9 @@ class GifRecorderMainWindow(QMainWindow):
         lossy_layout.addWidget(self.lossy_level_slider)
         lossy_layout.addWidget(self.lossy_level_label)
         quality_layout.addRow("Lossy Compression (0-10):", lossy_layout)
-        
+
+
+
         self.quality_groupbox.setLayout(quality_layout)
         quality_tab_layout.addWidget(self.quality_groupbox)
         self.edit_tabs.addTab(quality_tab, "Quality Settings")
@@ -250,6 +260,20 @@ class GifRecorderMainWindow(QMainWindow):
         self.preview_widget = PreviewWidget()
         preview_layout.addWidget(self.preview_widget)
         self.edit_tabs.addTab(preview_tab, "Preview && Trimming")
+
+        self.post_command_label = QLabel("Here you can input post commands in <b>bash</b>. "
+                                         "This will be executed after your file is saved. "
+                                         "For instance you can use <b>gifsicle</b>, <b>ffmpeg</b> or any other application you installed on your distro "
+                                         "to optimize your result additionally.<br>"
+                                         "<b>$output</b> - filename only<br>"
+                                         "<b>$output_full</b> - complete file path<br>"
+                                         "<b>$output_folder</b> - folder path")
+
+        self.post_command_label.setWordWrap(True)
+        quality_tab_layout.addWidget(self.post_command_label)
+
+        self.post_command_text_edit = QPlainTextEdit()
+        quality_tab_layout.addWidget(self.post_command_text_edit)
 
         self.controls_frame.layout().addWidget(self.edit_tabs)
         self.preview_widget.frame_deleted.connect(self._on_frame_deleted)
@@ -299,27 +323,32 @@ class GifRecorderMainWindow(QMainWindow):
         self.record_frame_signal.connect(self._on_record_frame_clicked)
 
         QApplication.instance().aboutToQuit.connect(self._cleanup_resources)
-    
+
     def _setup_window(self) -> None:
         self.setWindowTitle("Python GIF Screen Recorder")
-        
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-        x = (screen_geometry.width() - INITIAL_WINDOW_WIDTH) // 2
-        y = (screen_geometry.height() - INITIAL_WINDOW_HEIGHT) // 2
-        self.setGeometry(x, y, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)
-        
+
+        # Try to restore window geometry from settings first
+        self.config_manager.restore_window_state(self)
+
+        # If no saved geometry, use default positioning
+        if not self.config_manager.settings.value("Window/geometry"):
+            screen = QApplication.primaryScreen()
+            screen_geometry = screen.availableGeometry()
+            x = (screen_geometry.width() - INITIAL_WINDOW_WIDTH) // 2
+            y = (screen_geometry.height() - INITIAL_WINDOW_HEIGHT) // 2
+            self.setGeometry(x, y, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)
+
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint | 
+            Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Dialog
         )
-        
+
         # Performance optimizations
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_UpdatesDisabled, False)
-        
+
         self.setStyleSheet("QPushButton:disabled { color: #808080; }")
         self.show()
     
@@ -464,7 +493,83 @@ class GifRecorderMainWindow(QMainWindow):
             frames = frames[::settings.skip_frame]
         
         return frames
-    
+
+    def _execute_post_command(self, command: str, output_file: str) -> None:
+        """Execute post-save command with $output replaced by the saved filename"""
+        import uuid
+        import os
+
+        # Extract paths directly from output_file (which is already the full path from save dialog)
+        absolute_path = output_file  # This is already the full path
+        absolute_folder = os.path.dirname(output_file)  # Extract folder from the full path
+        filename_only = os.path.basename(output_file)  # Extract just the filename
+
+        # Replace placeholders - ORDER MATTERS! Replace longer strings first
+        command = command.replace("$output_full", f'"{absolute_path}"')
+        command = command.replace("$output_folder", f'"{absolute_folder}"')
+        command = command.replace("$output", f'"{filename_only}"')
+
+        print(absolute_folder)
+        print(absolute_path)
+        print(absolute_folder)
+        print(filename_only)
+
+        # Generate unique execution ID
+        exec_id = str(uuid.uuid4())
+
+        # Update status to show command execution
+        self.status_label.setText(f"Executing post-command...")
+        QApplication.processEvents()  # Update UI immediately
+
+        try:
+            # Execute the command
+            result = self.cmd_executor.execute(
+                execution_id=exec_id,
+                command=command,
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+
+            # Update status based on result
+            if result.success:
+                self.status_label.setText(f"Saved: {output_file} - Post-command completed successfully")
+            else:
+                error_msg = result.stderr[:100] if result.stderr else "Unknown error"
+                self.status_label.setText(f"Saved: {output_file} - Post-command failed: {error_msg}")
+
+                # Optionally show detailed error in a message box
+                QMessageBox.warning(
+                    self,
+                    "Post-Command Error",
+                    f"Post-command execution failed:\n\n{result.stderr}"
+                )
+
+        except Exception as e:
+            self.status_label.setText(f"Saved: {output_file} - Post-command error: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Post-Command Error",
+                f"Failed to execute post-command:\n\n{str(e)}"
+            )
+
+
+        except Exception as e:
+            self.status_label.setText(f"Saved: {output_file} - Post-command error: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Post-Command Error",
+                f"Failed to execute post-command:\n\n{str(e)}"
+            )
+
+        except Exception as e:
+            self.status_label.setText(f"Saved: {output_file} - Post-command error: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Post-Command Error",
+                f"Failed to execute post-command:\n\n{str(e)}"
+            )
+
     def _save_gif(self, frames: List[QImage], settings: QualitySettings) -> None:
         fps = self.preview_widget.preview_fps_spin.value()
         
@@ -482,9 +587,18 @@ class GifRecorderMainWindow(QMainWindow):
             enable_similarity_skip=settings.enable_similarity_skip,
             progress_callback=self._update_save_progress
         )
-        
+
         if saved_filename:
+            # If saved_filename is just a filename, we need to prepend the current directory
+            if not os.path.isabs(saved_filename):
+                saved_filename = os.path.abspath(saved_filename)
+
             self.status_label.setText(f"Saved: {saved_filename}")
+
+            # Execute post-save command if specified
+            post_command = self.post_command_text_edit.toPlainText().strip()
+            if post_command:
+                self._execute_post_command(post_command, saved_filename)
         else:
             self.update_status_label()
     
@@ -623,11 +737,16 @@ class GifRecorderMainWindow(QMainWindow):
         event.accept()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        """Save settings before closing."""
         self._is_closing = True
+
+        # Save all settings before cleanup
+        self.config_manager.save_all_settings(self)
+
         self._cleanup_resources()
         event.accept()
         QApplication.instance().quit()
-    
+
     def confirm_quit(self) -> None:
         reply = QMessageBox.question(
             self, "Quit Application",
@@ -637,19 +756,28 @@ class GifRecorderMainWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.close()
-    
+
     def _cleanup_resources(self) -> None:
+        """Clean up resources when closing."""
         self._is_closing = True
-        
+
+        # Save settings one more time during cleanup
+        if hasattr(self, 'config_manager'):
+            self.config_manager.save_all_settings(self)
+
         # Stop resize timer
         if hasattr(self, '_resize_timer'):
             self._resize_timer.stop()
-        
+
+        # Stop any running post-commands
+        if hasattr(self, 'cmd_executor'):
+            self.cmd_executor.stop_all(force=True)
+
         if self.recording_manager.timer:
             try:
                 self.recording_manager.timer.stop()
                 self.recording_manager.timer.wait(3000)
             except Exception as e:
                 print(f"Error stopping recording timer: {e}")
-        
+
         self.hotkey_manager.cleanup()

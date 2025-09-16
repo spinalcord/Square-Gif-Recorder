@@ -17,9 +17,7 @@ class RecordingManager:
     @property
     def mode(self) -> AppMode:
         return self._mode
-    
 
-    
     def start(self, record_rect: QRect, fps: int, mouse_skips: int = 0) -> bool:
         """Start recording. Returns True if successful."""
         if record_rect.width() <= 0 or record_rect.height() <= 0:
