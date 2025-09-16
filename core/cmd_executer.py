@@ -36,6 +36,7 @@ class CMDExecuter:
     """
     A utility class to simplify command line execution from Python.
     Provides methods for running shell commands with process management and cancellation.
+    Unix/Linux systems only.
     """
 
     def __init__(self, default_timeout: int = 0, default_shell: bool = True):
@@ -93,31 +94,17 @@ class CMDExecuter:
         actual_timeout = timeout if timeout and timeout > 0 else None
 
         try:
-            # Set up process group for proper cleanup of pipelines
-            if sys.platform != "win32":
-                # On Unix-like systems, create a new process group
-                process = subprocess.Popen(
-                    command,
-                    shell=shell,
-                    stdout=subprocess.PIPE if capture_output else None,
-                    stderr=subprocess.PIPE if capture_output else None,
-                    text=text,
-                    cwd=cwd,
-                    env=env,
-                    preexec_fn=os.setsid  # Create new session/process group
-                )
-            else:
-                # On Windows, use CREATE_NEW_PROCESS_GROUP
-                process = subprocess.Popen(
-                    command,
-                    shell=shell,
-                    stdout=subprocess.PIPE if capture_output else None,
-                    stderr=subprocess.PIPE if capture_output else None,
-                    text=text,
-                    cwd=cwd,
-                    env=env,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
-                )
+            # Create new session/process group for proper cleanup of pipelines
+            process = subprocess.Popen(
+                command,
+                shell=shell,
+                stdout=subprocess.PIPE if capture_output else None,
+                stderr=subprocess.PIPE if capture_output else None,
+                text=text,
+                cwd=cwd,
+                env=env,
+                preexec_fn=os.setsid  # Create new session/process group
+            )
 
             # Register the running process
             with self._lock:
@@ -240,27 +227,20 @@ class CMDExecuter:
 
         try:
             if running_process.process.poll() is None:  # Process is still running
-                if sys.platform != "win32":
-                    # On Unix-like systems, kill the entire process group
-                    try:
-                        if force:
-                            os.killpg(os.getpgid(running_process.process.pid), 9)  # SIGKILL
-                        else:
-                            os.killpg(os.getpgid(running_process.process.pid), 15)  # SIGTERM
-                    except ProcessLookupError:
-                        # Process group doesn't exist anymore, try individual process
-                        if force:
-                            running_process.process.kill()
-                        else:
-                            running_process.process.terminate()
-                    except OSError:
-                        # Fallback to individual process termination
-                        if force:
-                            running_process.process.kill()
-                        else:
-                            running_process.process.terminate()
-                else:
-                    # On Windows, use TerminateProcess on the process group
+                # Kill the entire process group
+                try:
+                    if force:
+                        os.killpg(os.getpgid(running_process.process.pid), 9)  # SIGKILL
+                    else:
+                        os.killpg(os.getpgid(running_process.process.pid), 15)  # SIGTERM
+                except ProcessLookupError:
+                    # Process group doesn't exist anymore, try individual process
+                    if force:
+                        running_process.process.kill()
+                    else:
+                        running_process.process.terminate()
+                except OSError:
+                    # Fallback to individual process termination
                     if force:
                         running_process.process.kill()
                     else:
@@ -272,12 +252,9 @@ class CMDExecuter:
                         running_process.process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         # If graceful termination failed, force kill
-                        if sys.platform != "win32":
-                            try:
-                                os.killpg(os.getpgid(running_process.process.pid), 9)
-                            except (ProcessLookupError, OSError):
-                                running_process.process.kill()
-                        else:
+                        try:
+                            os.killpg(os.getpgid(running_process.process.pid), 9)
+                        except (ProcessLookupError, OSError):
                             running_process.process.kill()
 
                 self._cleanup_process(execution_id)
@@ -412,11 +389,7 @@ class CMDExecuter:
         import uuid
         temp_id = str(uuid.uuid4())
 
-        if sys.platform == "win32":
-            check_cmd = f"where {command}"
-        else:
-            check_cmd = f"which {command}"
-
+        check_cmd = f"which {command}"
         result = self.execute(temp_id, check_cmd)
         return result.success
 
@@ -430,4 +403,3 @@ class CMDExecuter:
             print(self.last_result)
         else:
             print("No commands have been executed yet")
-
