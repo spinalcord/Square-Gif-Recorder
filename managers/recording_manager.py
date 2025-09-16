@@ -20,7 +20,7 @@ class RecordingManager:
     
 
     
-    def start(self, record_rect: QRect, fps: int) -> bool:
+    def start(self, record_rect: QRect, fps: int, mouse_skips: int = 0) -> bool:
         """Start recording. Returns True if successful."""
         if record_rect.width() <= 0 or record_rect.height() <= 0:
             QMessageBox.warning(self.main_window, "Error", "The recording area is too small.")
@@ -29,7 +29,7 @@ class RecordingManager:
         self.main_window.clear_frames(confirm=False)
         self._mode = AppMode.RECORDING
 
-        self.timer = RecordingTimer(record_rect, fps)
+        self.timer = RecordingTimer(record_rect, fps, mouse_skips)
         self.timer.frame_captured.connect(self.main_window.add_frame)
         self.timer.start()
         return True

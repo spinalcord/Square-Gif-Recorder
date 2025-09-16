@@ -142,7 +142,7 @@ class PreviewWidget(QWidget):
         controls_layout.addWidget(self.play_btn)
         
         # FPS control with better styling
-        controls_layout.addWidget(QLabel("Preview FPS:"))
+        controls_layout.addWidget(QLabel("Speed"))
         self.preview_fps_spin = QSpinBox()
         self.preview_fps_spin.setRange(1, 60)
         self.preview_fps_spin.setValue(15)

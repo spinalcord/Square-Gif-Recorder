@@ -10,12 +10,20 @@ class RecordingTimer(QThread):
     """
     frame_captured = pyqtSignal(QImage)
 
-    def __init__(self, rect: QRect, fps: int = 10, mouse_skip: int = 0):
+    def __init__(self, rect: QRect, fps: int = 10, mouse_skips: int = 0):
         super().__init__()
         self.rect = rect
         self.fps = fps
         self.is_running = False
         self.is_paused = False
+        self.mouse_skips = mouse_skips
+
+        # Frame counter for mouse skip feature
+        self.frame_counter = 0
+
+        # Store the current cursor position that should be drawn
+        self.current_cursor_pos = QCursor.pos()
+
         # Determine the correct screen based on the recording rectangle
         self.target_screen = self._get_screen_for_rect(rect)
 
@@ -78,6 +86,17 @@ class RecordingTimer(QThread):
 
             start_time = time.time()
 
+            # Update cursor position only when frame_counter is divisible by (mouse_skips + 1)
+            # This creates the skip effect:
+            # mouse_skips=0: update every frame (0, 1, 2, 3, ...)
+            # mouse_skips=1: update every 2nd frame (0, 2, 4, 6, ...)
+            # mouse_skips=2: update every 3rd frame (0, 3, 6, 9, ...)
+            if self.frame_counter % (self.mouse_skips + 1) == 0:
+                self.current_cursor_pos = QCursor.pos()
+
+            # Increment frame counter
+            self.frame_counter += 1
+
             # Convert to screen-specific coordinates (recalculate EVERY TIME!)
             screen_rect = self._convert_to_screen_coordinates(self.rect)
 
@@ -96,8 +115,8 @@ class RecordingTimer(QThread):
                 self.msleep(100)
                 continue
 
-            cursor_pos = QCursor.pos()
-            #self.draw_cursor_in_recording(pixmap, cursor_pos)
+            # Use the stored cursor position instead of getting it again
+            self.draw_cursor_in_recording(pixmap, self.current_cursor_pos)
 
             self.frame_captured.emit(pixmap.toImage())
 

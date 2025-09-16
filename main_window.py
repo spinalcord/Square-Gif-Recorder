@@ -133,10 +133,18 @@ class GifRecorderMainWindow(QMainWindow):
         self.fps_spin.setRange(1, 60)
         self.fps_spin.setValue(15)
         self.fps_spin.setMaximumSize(50, 25)  # Also limit spinbox size
-
         self.fps_label = QLabel("FPS:")
+
+        self.mouse_skips_spin = QSpinBox()
+        self.mouse_skips_spin.setRange(0, 60)
+        self.mouse_skips_spin.setValue(0)
+        self.mouse_skips_spin.setMaximumSize(30, 25)  # Also limit spinbox size
+        self.mouse_skips_label = QLabel("Mouse Skips:")
+
         fps_layout.addWidget(self.fps_label)
         fps_layout.addWidget(self.fps_spin)
+        fps_layout.addWidget(self.mouse_skips_label)
+        fps_layout.addWidget(self.mouse_skips_spin)
 
         self.status_label = QLabel("Ready.")
         self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -403,8 +411,7 @@ class GifRecorderMainWindow(QMainWindow):
         """Startet kontinuierliche Aufnahme"""
         self._save_window_size()
         record_rect = self.get_recording_rect()
-        
-        if self.recording_manager.start(record_rect, self.fps_spin.value()):
+        if self.recording_manager.start(record_rect, self.fps_spin.value(), self.mouse_skips_spin.value() ):
             self.ui_manager.update_for_mode(self.recording_manager.mode)
     
     def _stop_recording(self) -> None:
@@ -497,7 +504,8 @@ class GifRecorderMainWindow(QMainWindow):
         else:
             rect = self.get_recording_rect()
             if rect.width() > 0 and rect.height() > 0:
-                self.status_label.setText(f"{rect.width()} × {rect.height()}")
+                #self.status_label.setText(f"{rect.width()} × {rect.height()}")
+                self.status_label.setText(f"")
             else:
                 self.status_label.setText("")
     
