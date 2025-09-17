@@ -35,7 +35,7 @@ The application provides a range of settings to control the quality and file siz
 
 
 ## Installation
-[Download](https://github.com/spinalcord/Square-Gif-Recorder/releases/tag/Release) the executable:
+[Download](https://github.com/spinalcord/Square-Gif-Recorder/releases) the executable:
 
 Allow execution and run
 ```
