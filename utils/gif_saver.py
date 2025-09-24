@@ -70,11 +70,19 @@ class GifSettings:
         """Calculate frame duration in milliseconds, accounting for skipped frames."""
         base_duration = int(1000 / self.fps)
         return base_duration * self.skip_value
-    
+
+    # @property
+    # def pil_dither(self) -> Image.Dither:
+    #     """Get PIL dithering mode."""
+    #     return Image.Dither.FLOYDSTEINBERG if self.use_dithering else Image.Dither.NONE
+
     @property
-    def pil_dither(self) -> Image.Dither:
+    def pil_dither(self):
         """Get PIL dithering mode."""
-        return Image.Dither.FLOYDSTEINBERG if self.use_dithering else Image.Dither.NONE
+        if hasattr(Image, 'Dither'):
+            return Image.Dither.FLOYDSTEINBERG if self.use_dithering else Image.Dither.NONE
+        else:
+            return 1 if self.use_dithering else 0
     
     @property
     def pil_resample(self) -> int:
@@ -376,18 +384,29 @@ class ImageConverter:
             if settings.scale_factor < 1.0:
                 new_width = int(pil_image.width * settings.scale_factor)
                 new_height = int(pil_image.height * settings.scale_factor)
-                new_size = (max(1, new_width), max(1, new_height))  # Ensure minimum size
+                new_size = (max(1, new_width), max(1, new_height))
                 pil_image = pil_image.resize(new_size, resample=settings.pil_resample)
-            
-            # Convert to RGB and quantize colors
+
+            # Convert to RGB
             rgb_image = pil_image.convert('RGB')
-            quantized_image = rgb_image.quantize(
-                colors=settings.effective_num_colors, 
-                dither=settings.pil_dither
-            )
-            
+
+            # Dithering workaround: first quantize to get palette, then quantize again with dither
+            if settings.use_dithering:
+                # Step 1: Quantize without dithering to get the palette
+                temp_quantized = rgb_image.quantize(colors=settings.effective_num_colors)
+
+                # Step 2: Quantize again using that palette WITH dithering
+                quantized_image = rgb_image.quantize(
+                    colors=settings.effective_num_colors,
+                    palette=temp_quantized,
+                    dither=settings.pil_dither # type: ignore
+                )
+            else:
+                # No dithering - direct quantization works
+                quantized_image = rgb_image.quantize(colors=settings.effective_num_colors)
+
             return quantized_image
-            
+
         except Exception as e:
             raise RuntimeError(f"Failed to process image: {e}") from e
 
@@ -474,7 +493,7 @@ class ProgressManager:
         self.current_step = self.frames_processing_steps
         self.dialog.setValue(self.current_step)
         self.dialog.setLabelText("Writing GIF file...")
-        
+
         # Process events to update UI
         QApplication.processEvents()
         
@@ -747,6 +766,7 @@ def save_gif_from_frames(
             enable_similarity_skip=enable_similarity_skip  # NEU
         )
 
+
         return _gif_saver.save_gif_from_frames(
             parent_widget, frames, settings, progress_callback
         )
@@ -840,3 +860,4 @@ def estimate_gif_size(
                       effective_frames * compression_ratio)
     
     return int(header_size + palette_size + frame_data_size)
+
