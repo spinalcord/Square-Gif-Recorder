@@ -19,4 +19,4 @@ class HotkeyConfig:
     record: str = '<ctrl>+<alt>+r'
     pause: str = '<ctrl>+<alt>+p'
     stop: str = '<ctrl>+<alt>+s'
-    record_frame: str = '<ctrl>+<alt>+f'  # NEW: Hotkey for single frame recording
+    record_frame: str = '<ctrl>+<cmd>+f'  # NEW: Hotkey for single frame recording

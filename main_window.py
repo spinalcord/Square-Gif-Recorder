@@ -14,6 +14,7 @@ from widgets.range_slider import RangeSlider
 from widgets.preview_widget import PreviewWidget
 from core.cmd_executer import CMDExecuter
 from managers.config_manager import ConfigManager
+from widgets.config_dialog import ConfigDialog
 
 
 class GifRecorderMainWindow(QMainWindow):
@@ -43,7 +44,9 @@ class GifRecorderMainWindow(QMainWindow):
 
         self.ui_manager = UIManager(self)
         self.recording_manager = RecordingManager(self)
-        self.hotkey_manager = HotkeyManager(self, HotkeyConfig())
+
+        saved_hotkey_config = self.config_manager.load_hotkey_config()
+        self.hotkey_manager = HotkeyManager(self, saved_hotkey_config)
         
         self._init_ui()
         self._connect_signals()
@@ -107,12 +110,12 @@ class GifRecorderMainWindow(QMainWindow):
         self.record_frame_btn = QPushButton("🔵")
         self.pause_btn = QPushButton("▮▮")
         self.stop_btn = QPushButton("◼")
-        self.shortcuts_btn = QPushButton("?")
+        self.config_btn = QPushButton("🔧")
         self.quit_btn = QPushButton("X")
 
         # Set maximum and minimum sizes for compact buttons
         buttons = [self.record_btn, self.record_frame_btn, self.pause_btn,
-                   self.stop_btn, self.shortcuts_btn]
+                   self.stop_btn, self.config_btn]
 
         for button in buttons:
             button.setMaximumSize(30, 25)  # Width, Height
@@ -126,7 +129,7 @@ class GifRecorderMainWindow(QMainWindow):
         button_panel_layout.addWidget(self.stop_btn)
         button_panel_layout.addWidget(self.pause_btn)
         button_panel_layout.addWidget(self.record_frame_btn)
-        button_panel_layout.addWidget(self.shortcuts_btn)
+        button_panel_layout.addWidget(self.config_btn)
         button_panel_layout.addWidget(self.quit_btn)
 
         # Set minimum size for the button panel
@@ -309,7 +312,7 @@ class GifRecorderMainWindow(QMainWindow):
         self.record_frame_btn.clicked.connect(self._on_record_frame_clicked)
         self.pause_btn.clicked.connect(self._on_pause_clicked)
         self.stop_btn.clicked.connect(self._on_stop_clicked)
-        self.shortcuts_btn.clicked.connect(self._show_shortcuts_dialog) 
+        self.config_btn.clicked.connect(self._show_config_dialog)
 
         # Session management
         self.save_btn.clicked.connect(self._on_save_clicked)
@@ -323,6 +326,38 @@ class GifRecorderMainWindow(QMainWindow):
         self.record_frame_signal.connect(self._on_record_frame_clicked)
 
         QApplication.instance().aboutToQuit.connect(self._cleanup_resources)
+
+    def _show_config_dialog(self) -> None:
+        """Show configuration dialog."""
+        dialog = ConfigDialog(self, self.hotkey_manager.config)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Get new configuration
+            new_config = dialog.get_config()
+
+            # Stop old hotkeys
+            self.hotkey_manager.cleanup()
+
+            # Update configuration
+            self.hotkey_manager.config = new_config
+
+            # Setup new hotkeys
+            success = self.hotkey_manager.setup()
+
+            if success:
+                # Save new configuration
+                self.config_manager.save_all_settings(self)
+                QMessageBox.information(
+                    self,
+                    "Configuration Saved",
+                    "Hotkeys have been updated successfully."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Hotkey Error",
+                    "Failed to setup new hotkeys. Please check your configuration."
+                )
 
     def _setup_window(self) -> None:
         self.setWindowTitle("Python GIF Screen Recorder")

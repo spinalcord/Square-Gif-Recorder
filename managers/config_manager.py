@@ -3,6 +3,7 @@ from typing import Optional
 from PyQt6.QtCore import QSettings
 
 from utils.qt_imports import *
+from core.data_classes import HotkeyConfig
 
 
 class ConfigManager:
@@ -141,6 +142,35 @@ class ConfigManager:
         """
         return self.settings.value("PostCommand/command", "", type=str)
 
+    def save_hotkey_config(self, config: HotkeyConfig) -> None:
+        """Save hotkey configuration to settings.
+
+        Args:
+            config: HotkeyConfig instance with hotkey settings
+        """
+        self.settings.beginGroup("Hotkeys")
+        self.settings.setValue("record", config.record)
+        self.settings.setValue("pause", config.pause)
+        self.settings.setValue("stop", config.stop)
+        self.settings.setValue("record_frame", config.record_frame)
+        self.settings.endGroup()
+
+    def load_hotkey_config(self) -> HotkeyConfig:
+        """Load hotkey configuration from settings.
+
+        Returns:
+            HotkeyConfig instance with saved or default values
+        """
+        self.settings.beginGroup("Hotkeys")
+        config = HotkeyConfig(
+            record=self.settings.value("record", "<ctrl>+<alt>+r", type=str),
+            pause=self.settings.value("pause", "<ctrl>+<alt>+p", type=str),
+            stop=self.settings.value("stop", "<ctrl>+<alt>+s", type=str),
+            record_frame=self.settings.value("record_frame", "<ctrl>+<alt>+f", type=str)
+        )
+        self.settings.endGroup()
+        return config
+
     def save_all_settings(self, window) -> None:
         """Save all application settings.
 
@@ -170,6 +200,9 @@ class ConfigManager:
 
         # Save post command
         self.save_post_command(window.post_command_text_edit.toPlainText())
+
+        # Save hotkey configuration
+        self.save_hotkey_config(window.hotkey_manager.config)
 
         # Force write to disk
         self.settings.sync()

@@ -147,7 +147,7 @@ class UIManager:
         recording_buttons_visible = not is_edit
         mw.record_frame_btn.setVisible(recording_buttons_visible)
         mw.pause_btn.setVisible(recording_buttons_visible)
-        mw.shortcuts_btn.setVisible(recording_buttons_visible)
+        mw.config_btn.setVisible(recording_buttons_visible)  # CHANGED: shortcuts_btn -> config_btn
 
         # Session buttons (Save/New) only visible in edit mode
         mw.save_btn.setVisible(is_edit)
