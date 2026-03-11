@@ -1,11 +1,12 @@
+# Deprecated for now
+Reason: I use wayland and I have no plans for now to make this application compatible with wayland.
+
 # Square Linux Gif Recorder 
 
 A linux desktop application for recording GIFs, with a lot of quality settings.
 Please leave a ⭐ and pleas give feedback, i tested this on archlinux currently and I will support more linux distributions (In case it is not working on your distribution).
 
-> [!WARNING]
-> I use this application on my laptop which runs perfectly fine on x11.
-> Unfortunately on my working desk, which has wayland, it does not work.
+
 
 ![UI Screenshot](demo/ui_v1.5.gif) 
 ### UI Screenshot
